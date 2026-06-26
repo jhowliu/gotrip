@@ -1,26 +1,76 @@
 /**
- * Scripted ModelClient — a deterministic stand-in for the LLM (M0). It drives the
- * cold-start happy path (search → details → cluster → assemble → finalize) so the
- * whole loop runs end-to-end with zero API cost and is fully testable. The real
- * Claude tool-use client (AnthropicModelClient) arrives in M1.
+ * Scripted ModelClient — a deterministic stand-in for the LLM. Drives the
+ * cold-start path and, crucially, *self-corrects*: when finalize reports hard
+ * violations it re-plans (rebalance days for DAY_TOO_TIGHT, respect windows for
+ * CLOSED_HOURS) and retries once. Lets the whole self-correction loop be tested
+ * without an API. The real model (OpenAIModelClient) does this dynamically.
  */
 
-import type { HistoryItem, ModelClient, ModelRequest, ModelTurn } from "../../application/ports/ModelClient";
+import type { HistoryItem, ModelClient, ModelRequest, ModelToolCall, ModelTurn } from "../../application/ports/ModelClient";
 import type { Place, TripRequest } from "../../domain/itinerary";
 
-function parseLastSearchPlaceIds(history: HistoryItem[]): string[] {
+type Phase =
+  | "search"
+  | "details"
+  | "cluster"
+  | "assemble"
+  | "finalize"
+  | "check"
+  | "replan-assemble"
+  | "replan-finalize"
+  | "done";
+
+function callNames(history: HistoryItem[]): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const entry of history) {
+    if (entry.role === "assistant" && entry.turn.kind === "tool_use") {
+      for (const call of entry.turn.calls) names.set(call.id, call.name);
+    }
+  }
+  return names;
+}
+
+function lastToolResultContent(history: HistoryItem[]): unknown {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i];
+    if (entry?.role === "tool_result") {
+      try {
+        return JSON.parse(entry.content);
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function lastSearchPlaceIds(history: HistoryItem[]): string[] {
+  const names = callNames(history);
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const entry = history[i];
     if (entry?.role !== "tool_result") continue;
+    if (names.get(entry.callId) !== "searchPlaces") continue;
     try {
       const data: unknown = JSON.parse(entry.content);
       if (Array.isArray(data)) {
         return (data as Place[]).map((p) => p.placeId).filter((id): id is string => typeof id === "string");
       }
     } catch {
-      // not the search result — fall through
+      /* ignore */
     }
     return [];
+  }
+  return [];
+}
+
+function violationCodes(content: unknown): string[] {
+  if (content && typeof content === "object" && "hardViolations" in content) {
+    const list = (content as { hardViolations?: unknown }).hardViolations;
+    if (Array.isArray(list)) {
+      return list
+        .map((v) => (v && typeof v === "object" && "code" in v ? String((v as { code: unknown }).code) : ""))
+        .filter(Boolean);
+    }
   }
   return [];
 }
@@ -28,34 +78,68 @@ function parseLastSearchPlaceIds(history: HistoryItem[]): string[] {
 export function createScriptedColdStartModel(request: TripRequest): ModelClient {
   let callCounter = 0;
   const nextId = (): string => `call_${(callCounter += 1)}`;
+  const call = (name: string, input: unknown): ModelToolCall => ({ id: nextId(), name, input });
+
+  let phase: Phase = "search";
+  let respectWindows = false;
+  let retried = false;
 
   return {
     async next(req: ModelRequest): Promise<ModelTurn> {
-      const step = req.history.filter((h) => h.role === "assistant").length;
+      switch (phase) {
+        case "search":
+          phase = "details";
+          return { kind: "tool_use", calls: [call("searchPlaces", { query: "top attractions", type: "attraction" })] };
 
-      switch (step) {
-        case 0:
-          return {
-            kind: "tool_use",
-            calls: [{ id: nextId(), name: "searchPlaces", input: { query: "top attractions", type: "attraction" } }],
-          };
-        case 1: {
-          const searched = parseLastSearchPlaceIds(req.history);
+        case "details": {
+          phase = "cluster";
+          const searched = lastSearchPlaceIds(req.history);
           const mustVisit = (request.mustVisit ?? [])
             .map((m) => m.placeId)
             .filter((id): id is string => typeof id === "string");
           const ids = [...new Set([...searched, ...mustVisit])];
-          return {
-            kind: "tool_use",
-            calls: ids.map((placeId) => ({ id: nextId(), name: "getPlaceDetails", input: { placeId } })),
-          };
+          return { kind: "tool_use", calls: ids.map((placeId) => call("getPlaceDetails", { placeId })) };
         }
-        case 2:
-          return { kind: "tool_use", calls: [{ id: nextId(), name: "clusterByDay", input: {} }] };
-        case 3:
-          return { kind: "tool_use", calls: [{ id: nextId(), name: "assembleItinerary", input: {} }] };
+
+        case "cluster":
+          phase = "assemble";
+          return { kind: "tool_use", calls: [call("clusterByDay", {})] };
+
+        case "assemble":
+          phase = "finalize";
+          return { kind: "tool_use", calls: [call("assembleItinerary", respectWindows ? { respectWindows: true } : {})] };
+
+        case "finalize":
+          phase = "check";
+          return { kind: "tool_use", calls: [call("finalizeItinerary", {})] };
+
+        case "check": {
+          // Reached only if the previous finalize failed (success ends the loop).
+          if (retried) {
+            return { kind: "message", text: "Could not satisfy all hard constraints within budget." };
+          }
+          retried = true;
+          respectWindows = true;
+          const codes = violationCodes(lastToolResultContent(req.history));
+          if (codes.includes("DAY_TOO_TIGHT")) {
+            phase = "replan-assemble";
+            return { kind: "tool_use", calls: [call("rebalanceDays", {})] };
+          }
+          // CLOSED_HOURS or other: re-assemble honouring windows, then finalize.
+          phase = "replan-finalize";
+          return { kind: "tool_use", calls: [call("assembleItinerary", { respectWindows: true })] };
+        }
+
+        case "replan-assemble":
+          phase = "replan-finalize";
+          return { kind: "tool_use", calls: [call("assembleItinerary", { respectWindows: true })] };
+
+        case "replan-finalize":
+          phase = "check";
+          return { kind: "tool_use", calls: [call("finalizeItinerary", {})] };
+
         default:
-          return { kind: "tool_use", calls: [{ id: nextId(), name: "finalizeItinerary", input: {} }] };
+          return { kind: "message", text: "done" };
       }
     },
   };

@@ -1,9 +1,10 @@
 /**
  * Cold-start planning use case: build the `AgentSpec` for planning a trip from
- * scratch. The tools wrap the `ToolProvider` (real data) + pure domain skills
- * (clusterByDay, assemble, validate, estimateCost) and accumulate into a shared
- * planning state. Hard-constraint validation lives in `validate`; the
- * finalizeItinerary tool is the success exit.
+ * scratch. Tools wrap the `ToolProvider` (real data) + pure domain skills
+ * (clusterByDay, scheduleItinerary, rebalanceForBudget, validate, estimateCost)
+ * and accumulate into a shared planning state. Hard-constraint validation lives
+ * in `validate`; the finalizeItinerary tool is the success exit. When finalize
+ * reports violations the agent re-plans (respect windows / rebalance) and retries.
  */
 
 import { z } from "zod";
@@ -12,6 +13,7 @@ import type { AgentSpec, ToolDef, ToolOutcome } from "../agent/AgentSpec";
 import type { ToolProvider } from "../ports/ToolProvider";
 import type {
   DayAssignment,
+  GeoLocation,
   Itinerary,
   Place,
   PlaceDetail,
@@ -21,9 +23,11 @@ import type {
   ValidationResult,
 } from "../../domain/itinerary";
 import { clusterByDay, type ClusterPlace } from "../../domain/clusterByDay";
-import { assembleItinerary } from "../../domain/assemble";
+import { scheduleItinerary } from "../../domain/schedule";
+import { rebalanceForBudget } from "../../domain/rebalance";
 import { validate } from "../../domain/validate";
 import { estimateCost } from "../../domain/estimateCost";
+import { estimateTravelMinutes } from "../../domain/travel";
 
 export interface PlanningState {
   request: TripRequest;
@@ -34,6 +38,8 @@ export interface PlanningState {
   itinerary: Itinerary | null;
 }
 
+const legMinutes = (a: GeoLocation, b: GeoLocation): number => estimateTravelMinutes(a, b, "transit");
+
 function mustVisitIds(request: TripRequest): Set<string> {
   return new Set(
     (request.mustVisit ?? [])
@@ -42,7 +48,7 @@ function mustVisitIds(request: TripRequest): Set<string> {
   );
 }
 
-/** Validate the best itinerary we have; an incomplete plan is a hard violation. */
+/** Validate the best itinerary we have (with details for opening-hours checks). */
 function validateState(state: PlanningState): ValidationResult {
   const itinerary = state.itinerary ?? state.draft;
   if (!itinerary) {
@@ -53,7 +59,7 @@ function validateState(state: PlanningState): ValidationResult {
       softWarnings: [],
     };
   }
-  return validate(itinerary);
+  return validate(itinerary, state.details);
 }
 
 const searchSchema = z.object({
@@ -70,6 +76,7 @@ const travelSchema = z.object({
 const costSchema = z.object({
   items: z.array(z.object({ label: z.string(), amount: z.number() })),
 });
+const assembleSchema = z.object({ respectWindows: z.boolean().optional() }).passthrough();
 const noInput = z.object({}).passthrough();
 
 function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
@@ -92,7 +99,7 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
     },
     {
       name: "getPlaceDetails",
-      description: "Fetch full details (coords, opening hours, visit minutes, ticket price) for a place.",
+      description: "Fetch full details (coords, opening window, visit minutes, ticket price) for a place.",
       inputSchema: detailsSchema,
       async execute(input, state): Promise<ToolOutcome> {
         const { placeId } = input as { placeId: string };
@@ -158,18 +165,39 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
       },
     },
     {
-      name: "assembleItinerary",
-      description: "Lay out a draft itinerary from the day assignments and place details.",
+      name: "rebalanceDays",
+      description: "Re-balance the day assignments so no day exceeds its time budget. Use when finalize reports DAY_TOO_TIGHT.",
       inputSchema: noInput,
       execute(_input, state): ToolOutcome {
         if (!state.assignments) {
           return { content: { error: "no day assignments; call clusterByDay first" }, isError: true };
         }
-        const draft = assembleItinerary({
+        state.assignments = rebalanceForBudget({
+          assignments: state.assignments,
+          details: state.details,
+          legMinutes,
+          ...(state.request.pace ? { pace: state.request.pace } : {}),
+        });
+        return { content: state.assignments };
+      },
+    },
+    {
+      name: "assembleItinerary",
+      description:
+        "Lay out a draft itinerary (visits, transit, meals) from the day assignments. Pass respectWindows:true to honour opening hours when finalize reports CLOSED_HOURS.",
+      inputSchema: assembleSchema,
+      execute(input, state): ToolOutcome {
+        if (!state.assignments) {
+          return { content: { error: "no day assignments; call clusterByDay first" }, isError: true };
+        }
+        const { respectWindows } = input as { respectWindows?: boolean };
+        const draft = scheduleItinerary({
           request: state.request,
           assignments: state.assignments,
           details: state.details,
+          legMinutes,
           mustVisitIds: mustVisitIds(state.request),
+          ...(respectWindows !== undefined ? { options: { respectWindows } } : {}),
         });
         state.draft = draft;
         return { content: { days: draft.days.length, totalCost: draft.totalCost } };
@@ -184,7 +212,7 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
         if (!draft) {
           return { content: { error: "no draft; call assembleItinerary first" }, isError: true };
         }
-        const result = validate(draft);
+        const result = validate(draft, state.details);
         if (result.hardViolations.length > 0) {
           return { content: { hardViolations: result.hardViolations }, isError: true };
         }
@@ -203,12 +231,13 @@ const INSTRUCTION = [
   "(1) searchPlaces to find candidate attractions near the accommodation;",
   "(2) getPlaceDetails for the places you'll use — including every must-visit (use its placeId);",
   "(3) clusterByDay to spread the detailed places across the requested number of days;",
-  "(4) assembleItinerary to lay out a draft;",
+  "(4) assembleItinerary to lay out a draft (visits, transit, meals);",
   "(5) finalizeItinerary to validate and finish.",
-  "clusterByDay, assembleItinerary and finalizeItinerary take no arguments — they operate on",
-  "the data you've already gathered. Hard constraints (day count, must-visits scheduled) are",
-  "checked at finalize; if it reports violations, fix them and retry. Stop once finalizeItinerary",
-  "succeeds.",
+  "If finalize reports hard violations, fix them and retry:",
+  "for CLOSED_HOURS, call assembleItinerary again with respectWindows:true;",
+  "for DAY_TOO_TIGHT, call rebalanceDays, then assembleItinerary, then finalize again.",
+  "clusterByDay, rebalanceDays, assembleItinerary and finalizeItinerary operate on the data",
+  "you've already gathered. Stop once finalizeItinerary succeeds.",
 ].join(" ");
 
 export function createColdStartSpec(

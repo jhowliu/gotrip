@@ -1,17 +1,26 @@
 /**
  * The Validator — the reliability core. Pure and deterministic.
  *
- * M0 scope: only two hard constraints (day count, must-visits present). Later
- * milestones extend this with opening-hours, travel feasibility, flight buffer,
- * and budget. Soft warnings are surfaced but never block.
+ * Hard constraints checked:
+ *  - DAY_COUNT          day count equals the requested number of days
+ *  - MUST_VISIT_MISSING every must-visit (by placeId) is scheduled
+ *  - CLOSED_HOURS       a visit falls within the place's open window (needs details)
+ *  - DAY_TOO_TIGHT      a day ends past the pace-adjusted cap
+ *
+ * Later milestones add flight-buffer and budget. Soft warnings never block.
  */
 
-import type { Itinerary, ValidationResult, Violation } from "./itinerary";
+import type { Itinerary, PlaceDetail, ValidationResult, Violation } from "./itinerary";
+import { endTime, paceDayEndCap, toMinutes, withinWindow } from "./timing";
 
-export function validate(itinerary: Itinerary): ValidationResult {
+export function validate(
+  itinerary: Itinerary,
+  details?: ReadonlyMap<string, PlaceDetail>,
+): ValidationResult {
   const hardViolations: Violation[] = [];
   const softWarnings: Violation[] = [];
   const { request, days } = itinerary;
+  const dayCap = paceDayEndCap(request.pace);
 
   // Hard: day count must equal the requested number of days.
   if (days.length !== request.days) {
@@ -22,7 +31,7 @@ export function validate(itinerary: Itinerary): ValidationResult {
     });
   }
 
-  // Hard: every must-visit (identified by placeId) must be scheduled.
+  // Hard: every must-visit (by placeId) must be scheduled.
   const scheduled = new Set<string>();
   for (const day of days) {
     for (const item of day.items) {
@@ -39,7 +48,6 @@ export function validate(itinerary: Itinerary): ValidationResult {
     }
   }
 
-  // Soft: a day with no items is unusual but not invalid.
   for (const day of days) {
     if (day.items.length === 0) {
       softWarnings.push({
@@ -48,6 +56,49 @@ export function validate(itinerary: Itinerary): ValidationResult {
         dayIndex: day.dayIndex,
         source: "constraint",
       });
+      continue;
+    }
+
+    // Hard: visits must fall inside their place's open window.
+    if (details) {
+      for (const item of day.items) {
+        if (item.kind !== "visit" || !item.placeId) continue;
+        const detail = details.get(item.placeId);
+        if (detail?.openWindow && !withinWindow(item.startTime, item.durationMinutes, detail.openWindow)) {
+          hardViolations.push({
+            code: "CLOSED_HOURS",
+            message: `"${item.name}" is scheduled ${item.startTime}–${endTime(item)} but is only open ${detail.openWindow[0]}–${detail.openWindow[1]}`,
+            dayIndex: day.dayIndex,
+            itemId: item.itemId,
+            source: "constraint",
+          });
+        }
+      }
+    }
+
+    // Hard: the day must not run past the pace cap.
+    const last = day.items[day.items.length - 1]!;
+    const dayEnd = endTime(last);
+    if (toMinutes(dayEnd) > toMinutes(dayCap)) {
+      hardViolations.push({
+        code: "DAY_TOO_TIGHT",
+        message: `day ${day.dayIndex} ends at ${dayEnd}, past the ${dayCap} cap for "${request.pace ?? "default"}" pace`,
+        dayIndex: day.dayIndex,
+        source: "constraint",
+      });
+    }
+
+    // Soft: meals should land inside their window.
+    for (const item of day.items) {
+      if (item.kind === "meal" && item.mealWindow && !withinWindow(item.startTime, item.durationMinutes, item.mealWindow)) {
+        softWarnings.push({
+          code: "MEAL_OUT_OF_WINDOW",
+          message: `${item.name} at ${item.startTime} is outside ${item.mealWindow[0]}–${item.mealWindow[1]}`,
+          dayIndex: day.dayIndex,
+          itemId: item.itemId,
+          source: "constraint",
+        });
+      }
     }
   }
 

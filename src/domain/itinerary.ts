@@ -61,6 +61,8 @@ export interface PlaceDetail {
   category: string;
   location: GeoLocation;
   openingHours?: string[];
+  /** Daily open window ["HH:MM","HH:MM"] for timing checks. Omitted = always open. */
+  openWindow?: [string, string];
   rating?: number;
   priceLevel?: PriceLevel;
   estimatedVisitMinutes?: number;
