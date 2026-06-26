@@ -5,6 +5,8 @@
  * budget runs out.
  */
 
+import { zodToJsonSchema } from "zod-to-json-schema";
+
 import type { AgentSpec, ToolOutcome } from "./AgentSpec";
 import type { HistoryItem, ModelClient, ModelToolSpec } from "../ports/ModelClient";
 import type { ValidationResult } from "../../domain/itinerary";
@@ -22,9 +24,9 @@ function toModelToolSpecs<TState>(spec: AgentSpec<TState>): ModelToolSpec[] {
   return spec.tools.map((t) => ({
     name: t.name,
     description: t.description,
-    // M0: the scripted model ignores the schema. Proper zod→JSON-schema
-    // conversion lands with the Anthropic client in M1.
-    inputSchema: { type: "object" },
+    // Real JSON schema from the tool's zod schema — what a real model needs to
+    // produce valid arguments. The scripted model ignores it.
+    inputSchema: zodToJsonSchema(t.inputSchema, { $refStrategy: "none" }) as Record<string, unknown>,
   }));
 }
 

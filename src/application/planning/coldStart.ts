@@ -199,12 +199,16 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
 }
 
 const INSTRUCTION = [
-  "You are a travel-planning agent.",
-  "Given a TripRequest: search for candidate places near the accommodation, fetch details",
-  "for the ones you'll use (including every must-visit), cluster them across the requested",
-  "number of days, assemble a draft itinerary, then finalize it.",
-  "Hard constraints (day count, must-visits scheduled) are checked when you finalize — if",
-  "finalize reports violations, fix and retry. Call finalizeItinerary once the plan is valid.",
+  "You are a travel-planning agent. Plan a trip by calling tools in this order:",
+  "(1) searchPlaces to find candidate attractions near the accommodation;",
+  "(2) getPlaceDetails for the places you'll use — including every must-visit (use its placeId);",
+  "(3) clusterByDay to spread the detailed places across the requested number of days;",
+  "(4) assembleItinerary to lay out a draft;",
+  "(5) finalizeItinerary to validate and finish.",
+  "clusterByDay, assembleItinerary and finalizeItinerary take no arguments — they operate on",
+  "the data you've already gathered. Hard constraints (day count, must-visits scheduled) are",
+  "checked at finalize; if it reports violations, fix them and retry. Stop once finalizeItinerary",
+  "succeeds.",
 ].join(" ");
 
 export function createColdStartSpec(
@@ -214,7 +218,7 @@ export function createColdStartSpec(
   return {
     instruction: INSTRUCTION,
     kickoff: `Plan this trip:\n${JSON.stringify(request, null, 2)}`,
-    model: "claude-sonnet-4-6",
+    model: "gpt-4o-mini",
     constraints: { maxIterations: 25, maxTokens: 150_000, runtimeMs: 60_000 },
     tools: buildTools(provider),
     initialState: {

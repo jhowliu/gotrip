@@ -1,16 +1,19 @@
 /**
- * M0 demo: run the cold-start agent against the mock provider + scripted model,
- * then print the itinerary as JSON and readable text. No network, no API key.
+ * M0/M1 demo: run the cold-start agent against the mock provider, then print the
+ * itinerary as JSON and readable text.
  *
- *   pnpm dev
+ *   pnpm dev                                  # scripted model, zero config
+ *   tsx --env-file=.env src/interface/cli.ts  # real OpenAI model (needs OPENAI_API_KEY)
  */
 
+import type { ModelClient } from "../application/ports/ModelClient";
 import type { TripRequest } from "../domain/itinerary";
 import { runAgent } from "../application/agent/runAgent";
 import { createColdStartSpec } from "../application/planning/coldStart";
 import { formatItineraryJson, formatItineraryText } from "../application/formatting/format";
 import { createMockToolProvider } from "../infrastructure/tools/mock/mockToolProvider";
 import { createScriptedColdStartModel } from "../infrastructure/llm/scriptedModelClient";
+import { createOpenAIModelClient } from "../infrastructure/llm/openaiModelClient";
 import { TOKYO_ACCOMMODATION, TOKYO_PLACES } from "../infrastructure/tools/mock/fixtures";
 
 async function main(): Promise<void> {
@@ -24,7 +27,16 @@ async function main(): Promise<void> {
 
   const provider = createMockToolProvider(TOKYO_PLACES);
   const spec = createColdStartSpec(request, provider);
-  const model = createScriptedColdStartModel(request);
+
+  let model: ModelClient;
+  if (process.env.OPENAI_API_KEY) {
+    if (process.env.OPENAI_MODEL) spec.model = process.env.OPENAI_MODEL;
+    model = createOpenAIModelClient();
+    console.log(`model: OpenAI (${spec.model})`);
+  } else {
+    model = createScriptedColdStartModel(request);
+    console.log("model: scripted (no OPENAI_API_KEY set)");
+  }
 
   const result = await runAgent(spec, model);
 
