@@ -8,10 +8,14 @@ import type { ZodTypeAny } from "zod";
 import type { ValidationResult } from "../../domain/itinerary";
 
 export type ModelId =
+  // OpenAI (current default provider)
+  | "gpt-4o"
+  | "gpt-4o-mini"
+  // Anthropic
   | "claude-sonnet-4-6"
   | "claude-haiku-4-5"
   | "claude-opus-4-8"
-  // allow other ids without losing the suggestions above
+  // any other provider/model id still works (the ModelClient maps it)
   | (string & {});
 
 export interface AgentConstraints {
