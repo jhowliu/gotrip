@@ -1,17 +1,17 @@
-# PRD: 旅遊規劃 Agent — 對話式行程規劃核心
+# PRD: Travel-planning agent — conversational itinerary core
 
-> Status: draft, pending publish to GitHub Issues (`jhowliu/gotrip`) with label `ready-for-agent`.
-> Source of truth for rationale: `DESIGN.md`.
+> Published as [jhowliu/gotrip#1](https://github.com/jhowliu/gotrip/issues/1) with label `ready-for-agent`.
+> Source of truth for rationale: `DESIGN.md`. Sliced implementation tasks: issues #2–#7.
 
 ## Problem Statement
 
-旅行者要規劃一趟多日行程時,純對話式 LLM 會講出已歇業的店、記錯營業時間、用「語感」估交通而非真的算過,而且產出無法儲存、修改或驗證。使用者需要一個能查真實資料、實際計算交通與預算、在發現「某天太趕 / 超支 / 撞營業時間 / 趕不上班機」時自我重排,並能用自然語言反覆微調而仍維持整體合理性的規劃工具。
+When planning a multi-day trip, a purely conversational LLM names places that have closed down, misremembers opening hours, estimates travel by "feel" rather than actually computing it, and produces output that can't be saved, modified, or verified. The traveler needs a planning tool that queries real data, actually computes travel times and budgets, self-corrects when it finds a day that is too rushed / over budget / scheduled during closed hours / unable to make the departure flight, and lets them refine the plan in natural language while it stays coherent as a whole.
 
-(專案 meta-goal:把「會用工具 + 多步驟判斷 + 自我修正」的 agent 開發能力走一遍,旅遊規劃只是載體。)
+(Project meta-goal: to practice agent-development skill end to end — tool use + multi-step judgment + self-correction — with trip planning merely as the carrier.)
 
 ## Solution
 
-一個 ReAct agent:使用者給少量錨點(天數、目的地、住宿、必去點、班機、預算、步調),agent 釘住硬錨點 → 查候選 → 驗交通與營業時間 → 分群排程 → 對照預算 → 經確定性 Validator 把關,撞硬約束就自我重排 → 通過後 finalize。完成後進入對話階段,使用者用自然語言修改,agent 透過結構化編輯操作落地、重驗、維持合理性;與物理約束衝突時停下回報並提替代方案。整個 Phase 3 體驗先在 mock 資料上建成,真實 API、資料庫、拖拉 UI 是最後才接的外殼。
+A ReAct agent. The user supplies a few anchors (days, destination, accommodation, must-visits, flights, budget, pace). The agent pins the hard anchors, searches for candidates, verifies travel times and opening hours, clusters and schedules places across days, checks against budget, and gates the result through a deterministic Validator — re-planning itself whenever a hard constraint is violated — then finalizes. Once finished, it enters a conversational phase: the user modifies the plan in natural language, the agent applies the change through structured edit operations, re-validates, and keeps the plan coherent — stopping to report and offer alternatives when an instruction collides with a physical constraint. The entire Phase 3 experience is built first on mock data; real APIs, the database, and the drag-and-drop UI are the outer shell added last.
 
 ## User Stories
 
@@ -59,9 +59,9 @@
 
 ## Implementation Decisions
 
-**Architecture (B: fat agent + thin tools).** LLM is the planning subject; deterministic code and APIs supply facts and gate results. Algorithms are advisory tools, not a fixed pipeline.
+**Architecture (B: fat agent + thin tools).** The LLM is the planning subject; deterministic code and APIs supply facts and gate results. Algorithms are advisory tools, not a fixed pipeline.
 
-**Agent runtime — generic, reusable.** `runAgent` executes a hand-written ReAct loop over an `AgentSpec<TState>` carrying `instruction`, `model`, `constraints` (maxIterations, maxTokens, runtimeMs), `tools` (read/mutate a shared `TState`), `initialState`, and an injected `validate(state) → ValidationResult`. Runtime owns loop mechanics and is domain-agnostic; here `TState = Itinerary`. Claude native tool use; tool calls may batch per turn (**iterations count LLM turns, not tool calls**).
+**Agent runtime — generic, reusable.** `runAgent` executes a hand-written ReAct loop over an `AgentSpec<TState>` carrying `instruction`, `model`, `constraints` (maxIterations, maxTokens, runtimeMs), `tools` (read/mutate a shared `TState`), `initialState`, and an injected `validate(state) → ValidationResult`. The runtime owns loop mechanics and is domain-agnostic; here `TState = Itinerary`. Uses Claude native tool use; tool calls may batch per turn (**iterations count LLM turns, not tool calls**).
 
 **Two run modes, routed in code (not by the LLM):** cold-start (no existing itinerary → full planning from `TripRequest`) vs warm-start (existing itinerary → short edit loop seeded with current `Itinerary` JSON + new instruction; transcript not replayed).
 
