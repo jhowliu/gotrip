@@ -40,7 +40,9 @@ export interface ToolDef<TState> {
 export interface AgentSpec<TState> {
   instruction: string; // role + strategy (kept thin)
   kickoff: string; // the concrete task seed (e.g. the TripRequest)
-  model: ModelId;
+  model: ModelId; // the cheap default model for routine turns
+  /** One-shot stronger model, used only when the no-progress detector trips. */
+  escalationModel?: ModelId;
   constraints: AgentConstraints;
   tools: ToolDef<TState>[];
   initialState: TState;

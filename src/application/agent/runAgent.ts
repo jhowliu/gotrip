@@ -56,6 +56,8 @@ export async function runAgent<TState>(
   const startedAt = Date.now();
   let lastSignature = "";
   let repeats = 0;
+  let currentModel = spec.model;
+  let escalated = false;
 
   while (iterations < spec.constraints.maxIterations) {
     if (spec.constraints.runtimeMs !== undefined && Date.now() - startedAt >= spec.constraints.runtimeMs) {
@@ -67,7 +69,7 @@ export async function runAgent<TState>(
     tracer({ type: "iteration", iteration: iterations });
 
     const turn = await model.next({
-      model: spec.model,
+      model: currentModel,
       instruction: spec.instruction,
       tools,
       history,
@@ -79,8 +81,18 @@ export async function runAgent<TState>(
     repeats = signature === lastSignature ? repeats + 1 : 0;
     lastSignature = signature;
     if (repeats >= NO_PROGRESS_REPEATS) {
-      tracer({ type: "finish", status: "stopped", iterations });
-      return { status: "stopped", state, iterations, validation: spec.validate(state) };
+      // One-shot escalation: hand the stronger model the next turn before giving up.
+      if (spec.escalationModel !== undefined && !escalated) {
+        escalated = true;
+        tracer({ type: "escalation", iteration: iterations, from: currentModel, to: spec.escalationModel });
+        currentModel = spec.escalationModel;
+        repeats = 0;
+        lastSignature = "";
+        // fall through: process this turn's tools, the next turn uses the stronger model
+      } else {
+        tracer({ type: "finish", status: "stopped", iterations });
+        return { status: "stopped", state, iterations, validation: spec.validate(state) };
+      }
     }
 
     if (turn.kind !== "tool_use" || turn.calls.length === 0) {

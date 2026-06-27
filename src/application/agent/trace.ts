@@ -30,6 +30,7 @@ export type TraceEvent =
       output: unknown;
     }
   | { type: "model_message"; iteration: number; text: string }
+  | { type: "escalation"; iteration: number; from: string; to: string }
   | { type: "finish"; status: AgentStatus; iterations: number };
 
 export type Tracer = (event: TraceEvent) => void;
