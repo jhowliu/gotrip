@@ -121,11 +121,15 @@ export function createScriptedColdStartModel(request: TripRequest): ModelClient 
           }
           retried = true;
           const codes = violationCodes(lastToolResultContent(req.history));
-          if (codes.includes("DAY_TOO_TIGHT")) {
+          if (codes.includes("BUDGET_EXCEEDED")) {
+            phase = "replan-assemble";
+            return { kind: "tool_use", calls: [call("trimToBudget", {})] };
+          }
+          if (codes.includes("DAY_TOO_TIGHT") || codes.includes("FLIGHT_BUFFER")) {
             phase = "replan-assemble";
             return { kind: "tool_use", calls: [call("rebalanceDays", {})] };
           }
-          // CLOSED_HOURS or other: re-assemble honouring windows, then finalize.
+          // CLOSED_HOURS / ARRIVAL etc.: re-assemble honouring windows, then finalize.
           phase = "replan-finalize";
           return { kind: "tool_use", calls: [call("assembleItinerary", { respectWindows: true })] };
         }

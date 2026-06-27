@@ -30,6 +30,12 @@ export interface MustVisit {
 export type BudgetLevel = "economy" | "moderate" | "luxury";
 export type Pace = "relaxed" | "packed";
 
+/** A per-day spend band (destination currency). `max` is the hard ceiling. */
+export interface BudgetRange {
+  min?: number;
+  max: number;
+}
+
 export interface TripRequest {
   days: number;
   destination: string;
@@ -38,6 +44,8 @@ export interface TripRequest {
   arrival?: FlightInfo;
   departure?: FlightInfo;
   budgetLevel?: BudgetLevel;
+  /** Explicit per-day budget band; takes precedence over budgetLevel. */
+  budget?: BudgetRange;
   pace?: Pace;
 }
 

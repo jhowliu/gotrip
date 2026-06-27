@@ -19,10 +19,12 @@ import type {
 } from "./itinerary";
 import { haversineMeters } from "./clusterByDay";
 import {
+  ARRIVAL_TRANSFER_MINUTES,
   DAY_START,
   MEAL_SLOTS,
   TRANSIT_BUFFER_MINUTES,
   addMinutes,
+  timeOfDayFromIso,
   toMinutes,
   visitMinutes,
   type MealSlot,
@@ -123,11 +125,19 @@ function placeDueMeals(
   return c;
 }
 
+function dayStartTime(dayIndex: number, request: ScheduleInput["request"]): string {
+  if (dayIndex === 1 && request.arrival) {
+    const ready = addMinutes(timeOfDayFromIso(request.arrival.datetime), ARRIVAL_TRANSFER_MINUTES);
+    return toMinutes(ready) > toMinutes(DAY_START) ? ready : DAY_START;
+  }
+  return DAY_START;
+}
+
 function scheduleDay(assignment: DayAssignment, input: ScheduleInput, start: GeoLocation | null): ItineraryDay {
   const ordered = orderPlaces(assignment.placeIds, input, start);
   const items: ItineraryItem[] = [];
   const pending = [...MEAL_SLOTS];
-  let cursor = DAY_START;
+  let cursor = dayStartTime(assignment.dayIndex, input.request);
   let prev: PlaceDetail | null = null;
   let seq = 0;
 

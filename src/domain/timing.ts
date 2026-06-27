@@ -54,6 +54,19 @@ export function endTime(item: Pick<ItineraryItem, "startTime" | "durationMinutes
 /** Each day starts here. */
 export const DAY_START = "09:00";
 
+/** Conservative buffer: leave for the airport this long before departure. */
+export const AIRPORT_BUFFER_MINUTES = 180;
+
+/** Landing → ready to start sightseeing (immigration, baggage, transfer). */
+export const ARRIVAL_TRANSFER_MINUTES = 90;
+
+/** Extract "HH:MM" from an ISO datetime, lexically (timezone-stable for tests). */
+export function timeOfDayFromIso(iso: string): string {
+  const t = iso.split("T")[1] ?? "";
+  const hhmm = t.slice(0, 5);
+  return /^\d{2}:\d{2}$/.test(hhmm) ? hhmm : "00:00";
+}
+
 /** Buffer added to every transit leg, absorbing headway/transfer variance. */
 export const TRANSIT_BUFFER_MINUTES = 10;
 

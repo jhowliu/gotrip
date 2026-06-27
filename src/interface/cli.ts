@@ -7,7 +7,7 @@
  */
 
 import type { ModelClient } from "../application/ports/ModelClient";
-import type { TripRequest } from "../domain/itinerary";
+import type { PlaceDetail, TripRequest } from "../domain/itinerary";
 import { runAgent } from "../application/agent/runAgent";
 import { createColdStartSpec } from "../application/planning/coldStart";
 import { formatItineraryJson, formatItineraryText } from "../application/formatting/format";
@@ -18,34 +18,75 @@ import { createFileTracer } from "../infrastructure/observability/fileTracer";
 import {
   ADVERSARIAL_ACCOMMODATION,
   ADVERSARIAL_NARROW_WINDOW,
+  ADVERSARIAL_OVER_BUDGET,
   TOKYO_ACCOMMODATION,
   TOKYO_PLACES,
 } from "../infrastructure/tools/mock/fixtures";
 
 async function main(): Promise<void> {
-  // `... -- adversarial` runs the narrow-opening-window fixture, which trips
-  // CLOSED_HOURS so you can watch the agent detect it and re-plan in the trace.
-  const adversarial = process.argv.slice(2).includes("adversarial");
-
-  const request: TripRequest = adversarial
-    ? {
-        days: 1,
-        destination: "Tokyo",
-        accommodation: ADVERSARIAL_ACCOMMODATION,
-        mustVisit: [{ name: "Sunrise Museum", placeId: "a_sunrise" }],
-        pace: "relaxed",
-      }
-    : {
+  // Pick a scenario via `... -- <name>`. Each adversarial one trips a different
+  // hard constraint so you can watch the agent (real or scripted) self-correct.
+  type ScenarioName = "tokyo" | "adversarial" | "budget" | "flights";
+  interface Scenario {
+    label: string;
+    request: TripRequest;
+    places: PlaceDetail[];
+  }
+  const scenarios: Record<ScenarioName, Scenario> = {
+    tokyo: {
+      label: "tokyo (happy path)",
+      request: {
         days: 2,
         destination: "Tokyo",
         accommodation: TOKYO_ACCOMMODATION,
         mustVisit: [{ name: "teamLab Planets", placeId: "p_teamlab" }],
         pace: "relaxed",
-      };
+      },
+      places: TOKYO_PLACES,
+    },
+    adversarial: {
+      label: "adversarial — narrow opening window (CLOSED_HOURS)",
+      request: {
+        days: 1,
+        destination: "Tokyo",
+        accommodation: ADVERSARIAL_ACCOMMODATION,
+        mustVisit: [{ name: "Sunrise Museum", placeId: "a_sunrise" }],
+        pace: "relaxed",
+      },
+      places: ADVERSARIAL_NARROW_WINDOW,
+    },
+    budget: {
+      label: "budget — over a 3000–5000/day band (BUDGET_EXCEEDED → trim)",
+      request: {
+        days: 1,
+        destination: "Tokyo",
+        accommodation: ADVERSARIAL_ACCOMMODATION,
+        budget: { min: 3000, max: 5000 },
+        mustVisit: [{ name: "Free Shrine", placeId: "b_shrine" }],
+        pace: "relaxed",
+      },
+      places: ADVERSARIAL_OVER_BUDGET,
+    },
+    flights: {
+      label: "flights — impossible departure (FLIGHT_BUFFER → graceful exit)",
+      request: {
+        days: 2,
+        destination: "Tokyo",
+        accommodation: TOKYO_ACCOMMODATION,
+        departure: { airport: "NRT", datetime: "2026-07-03T11:00" },
+        mustVisit: [{ name: "teamLab Planets", placeId: "p_teamlab" }],
+        pace: "relaxed",
+      },
+      places: TOKYO_PLACES,
+    },
+  };
 
-  const provider = createMockToolProvider(adversarial ? ADVERSARIAL_NARROW_WINDOW : TOKYO_PLACES);
+  const arg = process.argv.slice(2).find((a): a is ScenarioName => a in scenarios);
+  const { label, request, places } = scenarios[arg ?? "tokyo"];
+
+  const provider = createMockToolProvider(places);
   const spec = createColdStartSpec(request, provider);
-  console.log(`scenario: ${adversarial ? "adversarial (narrow opening window)" : "tokyo (happy path)"}`);
+  console.log(`scenario: ${label}`);
 
   const logPath = `logs/run-${Date.now()}.ndjson`;
   const tracer = createFileTracer(logPath, { console: true });

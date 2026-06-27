@@ -25,6 +25,7 @@ import type {
 import { clusterByDay, type ClusterPlace } from "../../domain/clusterByDay";
 import { scheduleItinerary } from "../../domain/schedule";
 import { rebalanceForBudget } from "../../domain/rebalance";
+import { resolveBudget, trimToBudget } from "../../domain/budget";
 import { validate } from "../../domain/validate";
 import { estimateCost } from "../../domain/estimateCost";
 import { estimateTravelMinutes } from "../../domain/travel";
@@ -182,6 +183,28 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
       },
     },
     {
+      name: "trimToBudget",
+      description:
+        "Drop the most-expensive non-must-visit places until the plan fits the budget. Use when finalize reports BUDGET_EXCEEDED.",
+      inputSchema: noInput,
+      execute(_input, state): ToolOutcome {
+        if (!state.assignments) {
+          return { content: { error: "no day assignments; call clusterByDay first" }, isError: true };
+        }
+        const band = resolveBudget(state.request);
+        if (!band) {
+          return { content: { error: "no budget set" }, isError: true };
+        }
+        state.assignments = trimToBudget({
+          assignments: state.assignments,
+          details: state.details,
+          ceiling: band.maxTotal,
+          pinnedIds: mustVisitIds(state.request),
+        });
+        return { content: state.assignments };
+      },
+    },
+    {
       name: "assembleItinerary",
       description:
         "Lay out a draft itinerary (visits, transit, meals) from the day assignments, honouring opening hours.",
@@ -233,9 +256,10 @@ const INSTRUCTION = [
   "(3) clusterByDay to spread the detailed places across the requested number of days;",
   "(4) assembleItinerary to lay out a draft (visits, transit, meals) — it honours opening hours;",
   "(5) finalizeItinerary to validate and finish.",
-  "If finalize reports DAY_TOO_TIGHT, call rebalanceDays, then assembleItinerary, then finalize again.",
-  "clusterByDay, rebalanceDays, assembleItinerary and finalizeItinerary operate on the data",
-  "you've already gathered. Stop once finalizeItinerary succeeds.",
+  "If finalize reports hard violations, fix and retry:",
+  "DAY_TOO_TIGHT or FLIGHT_BUFFER → rebalanceDays, then assembleItinerary, then finalize;",
+  "BUDGET_EXCEEDED → trimToBudget, then assembleItinerary, then finalize.",
+  "These tools operate on the data you've already gathered. Stop once finalizeItinerary succeeds.",
 ].join(" ");
 
 export function createColdStartSpec(

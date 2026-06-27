@@ -113,3 +113,41 @@ export const ADVERSARIAL_NARROW_WINDOW: PlaceDetail[] = [
     ticketPrice: 0,
   },
 ];
+
+// --- Adversarial fixture: pricey galleries that bust an economy budget ---
+// A free must-visit survives; the agent must trim the expensive non-must-visits.
+
+export const ADVERSARIAL_OVER_BUDGET: PlaceDetail[] = [
+  {
+    placeId: "b_shrine",
+    name: "Free Shrine",
+    category: "shrine",
+    location: { name: "Free Shrine", lat: 35.69, lng: 139.7 },
+    estimatedVisitMinutes: 45,
+    ticketPrice: 0,
+  },
+  {
+    placeId: "b_gallA",
+    name: "Gallery A",
+    category: "museum",
+    location: { name: "Gallery A", lat: 35.692, lng: 139.702 },
+    estimatedVisitMinutes: 60,
+    ticketPrice: 4000,
+  },
+  {
+    placeId: "b_gallB",
+    name: "Gallery B",
+    category: "museum",
+    location: { name: "Gallery B", lat: 35.694, lng: 139.704 },
+    estimatedVisitMinutes: 60,
+    ticketPrice: 4000,
+  },
+  {
+    placeId: "b_gallC",
+    name: "Gallery C",
+    category: "museum",
+    location: { name: "Gallery C", lat: 35.696, lng: 139.706 },
+    estimatedVisitMinutes: 60,
+    ticketPrice: 4000,
+  },
+];
