@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { budgetCeiling, itineraryCost, trimToBudget } from "../src/domain/budget";
+import { budgetCeiling, itineraryCost, resolveBudget, trimToBudget } from "../src/domain/budget";
 import type { Itinerary, PlaceDetail, TripRequest } from "../src/domain/itinerary";
+
+function req(overrides: Partial<TripRequest>): TripRequest {
+  return { days: 2, destination: "T", accommodation: { name: "H" }, ...overrides };
+}
 
 function priced(id: string, price: number): PlaceDetail {
   return { placeId: id, name: id, category: "museum", location: { name: id, lat: 0, lng: 0 }, ticketPrice: price };
@@ -11,6 +15,14 @@ describe("budget", () => {
     expect(budgetCeiling("economy", 2)).toBe(12_000);
     expect(budgetCeiling("luxury", 1)).toBe(25_000);
     expect(budgetCeiling(undefined, 3)).toBeNull();
+  });
+
+  it("resolveBudget: per-day band (× days), level fallback, band wins over level", () => {
+    expect(resolveBudget(req({ budget: { min: 3000, max: 5000 } }))).toEqual({ minTotal: 6000, maxTotal: 10_000 });
+    expect(resolveBudget(req({ budgetLevel: "economy" }))).toEqual({ maxTotal: 12_000 });
+    expect(resolveBudget(req({}))).toBeNull();
+    // explicit band takes precedence over the level
+    expect(resolveBudget(req({ days: 1, budgetLevel: "luxury", budget: { max: 5000 } }))).toEqual({ maxTotal: 5000 });
   });
 
   it("sums itinerary cost from item estimatedCost", () => {

@@ -13,10 +13,19 @@ function oneDay(req: TripRequest, items: ItineraryItem[]): Itinerary {
 }
 
 describe("validate (flights + budget)", () => {
-  it("detects BUDGET_EXCEEDED", () => {
-    const req = request({ budgetLevel: "economy" }); // ceiling 6000
-    const result = validate(oneDay(req, [visit({ estimatedCost: 8000 })]));
-    expect(result.hardViolations.map((v) => v.code)).toContain("BUDGET_EXCEEDED");
+  it("detects BUDGET_EXCEEDED (level or numeric band max)", () => {
+    const byLevel = validate(oneDay(request({ budgetLevel: "economy" }), [visit({ estimatedCost: 8000 })]));
+    expect(byLevel.hardViolations.map((v) => v.code)).toContain("BUDGET_EXCEEDED");
+
+    const byBand = validate(oneDay(request({ budget: { max: 5000 } }), [visit({ estimatedCost: 8000 })]));
+    expect(byBand.hardViolations.map((v) => v.code)).toContain("BUDGET_EXCEEDED");
+  });
+
+  it("warns (soft) UNDER_BUDGET when below the band minimum", () => {
+    const req = request({ budget: { min: 3000, max: 5000 } }); // days 1 → min 3000
+    const result = validate(oneDay(req, [visit({ estimatedCost: 1000 })]));
+    expect(result.hardViolations).toHaveLength(0);
+    expect(result.softWarnings.map((v) => v.code)).toContain("UNDER_BUDGET");
   });
 
   it("detects ARRIVAL_TOO_EARLY", () => {

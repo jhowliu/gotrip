@@ -25,7 +25,7 @@ import type {
 import { clusterByDay, type ClusterPlace } from "../../domain/clusterByDay";
 import { scheduleItinerary } from "../../domain/schedule";
 import { rebalanceForBudget } from "../../domain/rebalance";
-import { budgetCeiling, trimToBudget } from "../../domain/budget";
+import { resolveBudget, trimToBudget } from "../../domain/budget";
 import { validate } from "../../domain/validate";
 import { estimateCost } from "../../domain/estimateCost";
 import { estimateTravelMinutes } from "../../domain/travel";
@@ -191,14 +191,14 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
         if (!state.assignments) {
           return { content: { error: "no day assignments; call clusterByDay first" }, isError: true };
         }
-        const ceiling = budgetCeiling(state.request.budgetLevel, state.request.days);
-        if (ceiling === null) {
-          return { content: { error: "no budget level set" }, isError: true };
+        const band = resolveBudget(state.request);
+        if (!band) {
+          return { content: { error: "no budget set" }, isError: true };
         }
         state.assignments = trimToBudget({
           assignments: state.assignments,
           details: state.details,
-          ceiling,
+          ceiling: band.maxTotal,
           pinnedIds: mustVisitIds(state.request),
         });
         return { content: state.assignments };

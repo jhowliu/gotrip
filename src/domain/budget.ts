@@ -3,7 +3,7 @@
  * drops the most-expensive non-pinned places until the plan fits. Pure.
  */
 
-import type { BudgetLevel, DayAssignment, Itinerary, PlaceDetail } from "./itinerary";
+import type { BudgetLevel, DayAssignment, Itinerary, PlaceDetail, TripRequest } from "./itinerary";
 
 /** Per-day spend ceiling (ticket/entry costs) by level, in JPY. */
 const PER_DAY_CEILING: Readonly<Record<BudgetLevel, number>> = {
@@ -12,10 +12,32 @@ const PER_DAY_CEILING: Readonly<Record<BudgetLevel, number>> = {
   luxury: 25_000,
 };
 
-/** Total hard ceiling, or null when no budget level is set (no constraint). */
+/** Total hard ceiling for a level, or null when unset. */
 export function budgetCeiling(level: BudgetLevel | undefined, days: number): number | null {
   if (!level) return null;
   return PER_DAY_CEILING[level] * days;
+}
+
+/** Total budget band (over the whole trip). `maxTotal` is the hard ceiling. */
+export interface BudgetBand {
+  minTotal?: number;
+  maxTotal: number;
+}
+
+/**
+ * Resolve the effective budget for a request: an explicit `budget` range
+ * (per-day × days) takes precedence; otherwise fall back to `budgetLevel`.
+ * Returns null when neither is set (no budget constraint).
+ */
+export function resolveBudget(request: TripRequest): BudgetBand | null {
+  const days = Math.max(1, request.days);
+  if (request.budget) {
+    const band: BudgetBand = { maxTotal: request.budget.max * days };
+    if (typeof request.budget.min === "number") band.minTotal = request.budget.min * days;
+    return band;
+  }
+  const ceiling = budgetCeiling(request.budgetLevel, days);
+  return ceiling === null ? null : { maxTotal: ceiling };
 }
 
 export function itineraryCost(itinerary: Itinerary): number {

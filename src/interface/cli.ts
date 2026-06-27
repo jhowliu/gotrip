@@ -56,12 +56,12 @@ async function main(): Promise<void> {
       places: ADVERSARIAL_NARROW_WINDOW,
     },
     budget: {
-      label: "budget — over the economy ceiling (BUDGET_EXCEEDED → trim)",
+      label: "budget — over a 3000–5000/day band (BUDGET_EXCEEDED → trim)",
       request: {
         days: 1,
         destination: "Tokyo",
         accommodation: ADVERSARIAL_ACCOMMODATION,
-        budgetLevel: "economy",
+        budget: { min: 3000, max: 5000 },
         mustVisit: [{ name: "Free Shrine", placeId: "b_shrine" }],
         pace: "relaxed",
       },

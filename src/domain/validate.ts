@@ -21,7 +21,7 @@ import {
   toMinutes,
   withinWindow,
 } from "./timing";
-import { budgetCeiling, itineraryCost } from "./budget";
+import { itineraryCost, resolveBudget } from "./budget";
 
 export function validate(
   itinerary: Itinerary,
@@ -58,14 +58,20 @@ export function validate(
     }
   }
 
-  // Hard: total cost must not exceed the budget ceiling.
-  const ceiling = budgetCeiling(request.budgetLevel, request.days);
-  if (ceiling !== null) {
+  // Budget: hard ceiling (band max) + soft under-budget hint (band min).
+  const band = resolveBudget(request);
+  if (band) {
     const cost = itineraryCost(itinerary);
-    if (cost > ceiling) {
+    if (cost > band.maxTotal) {
       hardViolations.push({
         code: "BUDGET_EXCEEDED",
-        message: `total cost ${cost} exceeds the ${request.budgetLevel} ceiling of ${ceiling}`,
+        message: `total cost ${cost} exceeds the budget ceiling of ${band.maxTotal}`,
+        source: "constraint",
+      });
+    } else if (band.minTotal !== undefined && cost < band.minTotal) {
+      softWarnings.push({
+        code: "UNDER_BUDGET",
+        message: `total cost ${cost} is under the target minimum of ${band.minTotal}`,
         source: "constraint",
       });
     }
