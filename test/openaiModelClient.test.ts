@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import OpenAI from "openai";
 import {
   fromOpenAIMessage,
+  mapUsage,
   toOpenAIMessages,
   toOpenAITools,
 } from "../src/infrastructure/llm/openaiModelClient";
@@ -73,5 +74,15 @@ describe("OpenAIModelClient translation (pure)", () => {
 
     const turn = fromOpenAIMessage(message);
     expect(turn).toEqual({ kind: "message", text: "done" });
+  });
+
+  it("maps OpenAI usage to neutral TokenUsage", () => {
+    expect(mapUsage({ prompt_tokens: 120, completion_tokens: 30, total_tokens: 150 })).toEqual({
+      promptTokens: 120,
+      completionTokens: 30,
+      totalTokens: 150,
+    });
+    expect(mapUsage(null)).toBeUndefined();
+    expect(mapUsage(undefined)).toBeUndefined();
   });
 });

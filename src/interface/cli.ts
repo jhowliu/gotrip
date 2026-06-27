@@ -47,23 +47,23 @@ async function main(): Promise<void> {
   const spec = createColdStartSpec(request, provider);
   console.log(`scenario: ${adversarial ? "adversarial (narrow opening window)" : "tokyo (happy path)"}`);
 
+  const logPath = `logs/run-${Date.now()}.ndjson`;
+  const tracer = createFileTracer(logPath, { console: true });
+
   let model: ModelClient;
   if (process.env.OPENAI_API_KEY) {
     if (process.env.OPENAI_MODEL) spec.model = process.env.OPENAI_MODEL;
-    model = createOpenAIModelClient();
+    model = createOpenAIModelClient({ tracer });
     console.log(`model: OpenAI (${spec.model})`);
   } else {
     model = createScriptedColdStartModel(request);
     console.log("model: scripted (no OPENAI_API_KEY set)");
   }
-
-  const logPath = `logs/run-${Date.now()}.ndjson`;
-  const tracer = createFileTracer(logPath, { console: true });
+  console.log(`trace: ${logPath}`);
 
   const result = await runAgent(spec, model, tracer);
 
   console.log("");
-  console.log(`trace: ${logPath}`);
   console.log(`status: ${result.status} (${result.iterations} iterations)`);
   console.log(`hard violations: ${result.validation.hardViolations.length}`);
   console.log("");

@@ -24,6 +24,17 @@ function humanLine(event: TraceEvent): string | null {
   switch (event.type) {
     case "iteration":
       return `\n— iteration ${event.iteration} —`;
+    case "model_request": {
+      const n = Array.isArray(event.messages) ? event.messages.length : "?";
+      return `  · → ${event.model} (${n} messages)`;
+    }
+    case "model_response": {
+      const u = event.usage;
+      const tok = u ? ` tokens=${u.promptTokens ?? "?"}/${u.completionTokens ?? "?"}` : "";
+      return `  · ← ${event.model}${tok}`;
+    }
+    case "model_error":
+      return `  · ✗ ${event.model}: ${event.message}`;
     case "tool_call":
       return `  → ${event.name}(${preview(event.input)})`;
     case "tool_result":
