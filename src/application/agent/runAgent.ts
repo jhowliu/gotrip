@@ -2,7 +2,7 @@
  * The hand-written ReAct loop. Generic over `TState`; owns only the loop
  * mechanics. It knows nothing about travel — just: call the model, run the tools
  * it asks for, feed results back, stop on a `final` tool outcome or when the
- * budget runs out.
+ * budget runs out. Emits trace events to an injected `Tracer` (default no-op).
  */
 
 import { zodToJsonSchema } from "zod-to-json-schema";
@@ -10,8 +10,9 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { AgentSpec, ToolOutcome } from "./AgentSpec";
 import type { HistoryItem, ModelClient, ModelToolSpec } from "../ports/ModelClient";
 import type { ValidationResult } from "../../domain/itinerary";
+import { noopTracer, type AgentStatus, type Tracer } from "./trace";
 
-export type AgentStatus = "ok" | "budget_exhausted" | "stopped";
+export type { AgentStatus };
 
 export interface AgentResult<TState> {
   status: AgentStatus;
@@ -24,19 +25,18 @@ function toModelToolSpecs<TState>(spec: AgentSpec<TState>): ModelToolSpec[] {
   return spec.tools.map((t) => ({
     name: t.name,
     description: t.description,
-    // Real JSON schema from the tool's zod schema — what a real model needs to
-    // produce valid arguments. The scripted model ignores it.
     inputSchema: zodToJsonSchema(t.inputSchema, { $refStrategy: "none" }) as Record<string, unknown>,
   }));
 }
 
-function toolResult(callId: string, content: unknown, isError = false): HistoryItem {
+function toolResultItem(callId: string, content: unknown, isError: boolean): HistoryItem {
   return { role: "tool_result", callId, content: JSON.stringify(content), isError };
 }
 
 export async function runAgent<TState>(
   spec: AgentSpec<TState>,
   model: ModelClient,
+  tracer: Tracer = noopTracer,
 ): Promise<AgentResult<TState>> {
   const state = spec.initialState;
   const tools = toModelToolSpecs(spec);
@@ -45,6 +45,8 @@ export async function runAgent<TState>(
 
   while (iterations < spec.constraints.maxIterations) {
     iterations += 1;
+    tracer({ type: "iteration", iteration: iterations });
+
     const turn = await model.next({
       model: spec.model,
       instruction: spec.instruction,
@@ -54,40 +56,50 @@ export async function runAgent<TState>(
     history.push({ role: "assistant", turn });
 
     if (turn.kind !== "tool_use" || turn.calls.length === 0) {
-      // Model ended without finalizing — stop and report.
+      if (turn.kind === "message") tracer({ type: "model_message", iteration: iterations, text: turn.text });
+      tracer({ type: "finish", status: "stopped", iterations });
       return { status: "stopped", state, iterations, validation: spec.validate(state) };
     }
 
     for (const call of turn.calls) {
+      tracer({ type: "tool_call", iteration: iterations, callId: call.id, name: call.name, input: call.input });
+
       const tool = spec.tools.find((t) => t.name === call.name);
+      let output: unknown;
+      let isError = false;
+      let final = false;
+
       if (!tool) {
-        history.push(toolResult(call.id, { error: `unknown tool: ${call.name}` }, true));
-        continue;
+        output = { error: `unknown tool: ${call.name}` };
+        isError = true;
+      } else {
+        const parsed = tool.inputSchema.safeParse(call.input);
+        if (!parsed.success) {
+          output = { error: "invalid tool input", issues: parsed.error.issues };
+          isError = true;
+        } else {
+          try {
+            const outcome: ToolOutcome = await tool.execute(parsed.data, state);
+            output = outcome.content;
+            isError = outcome.isError ?? false;
+            final = outcome.final ?? false;
+          } catch (err) {
+            output = { error: err instanceof Error ? err.message : String(err) };
+            isError = true;
+          }
+        }
       }
 
-      const parsed = tool.inputSchema.safeParse(call.input);
-      if (!parsed.success) {
-        history.push(toolResult(call.id, { error: "invalid tool input", issues: parsed.error.issues }, true));
-        continue;
-      }
+      history.push(toolResultItem(call.id, output, isError));
+      tracer({ type: "tool_result", iteration: iterations, callId: call.id, name: call.name, isError, final, output });
 
-      let outcome: ToolOutcome;
-      try {
-        outcome = await tool.execute(parsed.data, state);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        history.push(toolResult(call.id, { error: message }, true));
-        continue;
-      }
-
-      history.push(toolResult(call.id, outcome.content, outcome.isError ?? false));
-
-      if (outcome.final) {
+      if (final) {
+        tracer({ type: "finish", status: "ok", iterations });
         return { status: "ok", state, iterations, validation: spec.validate(state) };
       }
     }
   }
 
-  // Budget exhausted: graceful exit with a best-effort validation of current state.
+  tracer({ type: "finish", status: "budget_exhausted", iterations });
   return { status: "budget_exhausted", state, iterations, validation: spec.validate(state) };
 }

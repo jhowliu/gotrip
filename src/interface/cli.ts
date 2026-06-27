@@ -14,6 +14,7 @@ import { formatItineraryJson, formatItineraryText } from "../application/formatt
 import { createMockToolProvider } from "../infrastructure/tools/mock/mockToolProvider";
 import { createScriptedColdStartModel } from "../infrastructure/llm/scriptedModelClient";
 import { createOpenAIModelClient } from "../infrastructure/llm/openaiModelClient";
+import { createFileTracer } from "../infrastructure/observability/fileTracer";
 import { TOKYO_ACCOMMODATION, TOKYO_PLACES } from "../infrastructure/tools/mock/fixtures";
 
 async function main(): Promise<void> {
@@ -38,8 +39,13 @@ async function main(): Promise<void> {
     console.log("model: scripted (no OPENAI_API_KEY set)");
   }
 
-  const result = await runAgent(spec, model);
+  const logPath = `logs/run-${Date.now()}.ndjson`;
+  const tracer = createFileTracer(logPath, { console: true });
 
+  const result = await runAgent(spec, model, tracer);
+
+  console.log("");
+  console.log(`trace: ${logPath}`);
   console.log(`status: ${result.status} (${result.iterations} iterations)`);
   console.log(`hard violations: ${result.validation.hardViolations.length}`);
   console.log("");
