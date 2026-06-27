@@ -8,7 +8,7 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { AgentSpec, ToolOutcome } from "./AgentSpec";
-import type { HistoryItem, ModelClient, ModelToolSpec } from "../ports/ModelClient";
+import type { HistoryItem, ModelClient, ModelToolSpec, ModelTurn } from "../ports/ModelClient";
 import type { ValidationResult } from "../../domain/itinerary";
 import { noopTracer, type AgentStatus, type Tracer } from "./trace";
 
@@ -19,6 +19,17 @@ export interface AgentResult<TState> {
   state: TState;
   iterations: number;
   validation: ValidationResult;
+}
+
+/** Halt if the model repeats the identical turn this many extra times in a row. */
+const NO_PROGRESS_REPEATS = 2;
+
+/** Signature of a turn ignoring call ids — so repeated identical actions match. */
+function turnSignature(turn: ModelTurn): string {
+  if (turn.kind === "tool_use") {
+    return `tool:${JSON.stringify(turn.calls.map((c) => [c.name, c.input]))}`;
+  }
+  return `msg:${turn.text}`;
 }
 
 function toModelToolSpecs<TState>(spec: AgentSpec<TState>): ModelToolSpec[] {
@@ -42,8 +53,16 @@ export async function runAgent<TState>(
   const tools = toModelToolSpecs(spec);
   const history: HistoryItem[] = [{ role: "user", content: spec.kickoff }];
   let iterations = 0;
+  const startedAt = Date.now();
+  let lastSignature = "";
+  let repeats = 0;
 
   while (iterations < spec.constraints.maxIterations) {
+    if (spec.constraints.runtimeMs !== undefined && Date.now() - startedAt >= spec.constraints.runtimeMs) {
+      tracer({ type: "finish", status: "budget_exhausted", iterations });
+      return { status: "budget_exhausted", state, iterations, validation: spec.validate(state) };
+    }
+
     iterations += 1;
     tracer({ type: "iteration", iteration: iterations });
 
@@ -54,6 +73,15 @@ export async function runAgent<TState>(
       history,
     });
     history.push({ role: "assistant", turn });
+
+    // No-progress detection: identical turn repeated too many times in a row.
+    const signature = turnSignature(turn);
+    repeats = signature === lastSignature ? repeats + 1 : 0;
+    lastSignature = signature;
+    if (repeats >= NO_PROGRESS_REPEATS) {
+      tracer({ type: "finish", status: "stopped", iterations });
+      return { status: "stopped", state, iterations, validation: spec.validate(state) };
+    }
 
     if (turn.kind !== "tool_use" || turn.calls.length === 0) {
       if (turn.kind === "message") tracer({ type: "model_message", iteration: iterations, text: turn.text });
