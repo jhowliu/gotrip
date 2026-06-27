@@ -75,25 +75,27 @@ describe("scheduleItinerary", () => {
     expect(withinWindow(lunch!.startTime, lunch!.durationMinutes, lunch!.mealWindow!)).toBe(true);
   });
 
-  it("respectWindows lands a narrow-window place inside its window", () => {
+  it("honours opening windows by default; respectWindows:false produces the naive (violating) plan", () => {
     const details = new Map([
       ["near", detail("near", 35.692, 139.702, "cafe", 60)],
       ["far", detail("far", 35.72, 139.78, "museum", 60, ["09:00", "10:30"])],
     ]);
     const placeIds = ["near", "far"];
 
-    const naive = scheduleItinerary({ request, assignments: [{ dayIndex: 1, placeIds }], details, legMinutes: leg });
-    const naiveFar = naive.days[0]!.items.find((i) => i.placeId === "far")!;
-    expect(withinWindow(naiveFar.startTime, naiveFar.durationMinutes, ["09:00", "10:30"])).toBe(false);
+    // default (window-aware) → "far" lands inside its window
+    const def = scheduleItinerary({ request, assignments: [{ dayIndex: 1, placeIds }], details, legMinutes: leg });
+    const defFar = def.days[0]!.items.find((i) => i.placeId === "far")!;
+    expect(withinWindow(defFar.startTime, defFar.durationMinutes, ["09:00", "10:30"])).toBe(true);
 
-    const fixed = scheduleItinerary({
+    // opt out → naive geometry order schedules "far" late → outside its window
+    const naive = scheduleItinerary({
       request,
       assignments: [{ dayIndex: 1, placeIds }],
       details,
       legMinutes: leg,
-      options: { respectWindows: true },
+      options: { respectWindows: false },
     });
-    const fixedFar = fixed.days[0]!.items.find((i) => i.placeId === "far")!;
-    expect(withinWindow(fixedFar.startTime, fixedFar.durationMinutes, ["09:00", "10:30"])).toBe(true);
+    const naiveFar = naive.days[0]!.items.find((i) => i.placeId === "far")!;
+    expect(withinWindow(naiveFar.startTime, naiveFar.durationMinutes, ["09:00", "10:30"])).toBe(false);
   });
 });

@@ -81,7 +81,6 @@ export function createScriptedColdStartModel(request: TripRequest): ModelClient 
   const call = (name: string, input: unknown): ModelToolCall => ({ id: nextId(), name, input });
 
   let phase: Phase = "search";
-  let respectWindows = false;
   let retried = false;
 
   return {
@@ -107,7 +106,9 @@ export function createScriptedColdStartModel(request: TripRequest): ModelClient 
 
         case "assemble":
           phase = "finalize";
-          return { kind: "tool_use", calls: [call("assembleItinerary", respectWindows ? { respectWindows: true } : {})] };
+          // Deliberately naive first pass (scheduler defaults to window-aware) so
+          // the adversarial fixture trips CLOSED_HOURS and the loop is exercised.
+          return { kind: "tool_use", calls: [call("assembleItinerary", { respectWindows: false })] };
 
         case "finalize":
           phase = "check";
@@ -119,7 +120,6 @@ export function createScriptedColdStartModel(request: TripRequest): ModelClient 
             return { kind: "message", text: "Could not satisfy all hard constraints within budget." };
           }
           retried = true;
-          respectWindows = true;
           const codes = violationCodes(lastToolResultContent(req.history));
           if (codes.includes("DAY_TOO_TIGHT")) {
             phase = "replan-assemble";

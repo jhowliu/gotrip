@@ -29,7 +29,11 @@ import {
 } from "./timing";
 
 export interface ScheduleOptions {
-  /** Order/place places with an openWindow so they land inside it. */
+  /**
+   * Order/place places with an openWindow so they land inside it. Defaults to
+   * true (honour opening hours). Set false only to deliberately produce a naive
+   * plan — used by tests to exercise the CLOSED_HOURS self-correction loop.
+   */
   respectWindows?: boolean;
 }
 
@@ -76,7 +80,7 @@ function orderPlaces(placeIds: string[], input: ScheduleInput, start: GeoLocatio
     .map((id) => input.details.get(id))
     .filter((d): d is PlaceDetail => d !== undefined);
 
-  if (input.options?.respectWindows) {
+  if (input.options?.respectWindows ?? true) {
     // windowed places first (earliest window first), so they land in their slot
     const windowed = detailed
       .filter((d) => d.openWindow)
@@ -145,7 +149,7 @@ function scheduleDay(assignment: DayAssignment, input: ScheduleInput, start: Geo
     cursor = placeDueMeals(items, pending, cursor, assignment.dayIndex);
 
     let start_ = cursor;
-    if (input.options?.respectWindows && place.openWindow && toMinutes(start_) < toMinutes(place.openWindow[0])) {
+    if ((input.options?.respectWindows ?? true) && place.openWindow && toMinutes(start_) < toMinutes(place.openWindow[0])) {
       start_ = place.openWindow[0]; // wait until it opens
     }
     const duration = visitMinutes(place.category, place.estimatedVisitMinutes);

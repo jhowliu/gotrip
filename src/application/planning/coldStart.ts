@@ -184,7 +184,7 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
     {
       name: "assembleItinerary",
       description:
-        "Lay out a draft itinerary (visits, transit, meals) from the day assignments. Pass respectWindows:true to honour opening hours when finalize reports CLOSED_HOURS.",
+        "Lay out a draft itinerary (visits, transit, meals) from the day assignments, honouring opening hours.",
       inputSchema: assembleSchema,
       execute(input, state): ToolOutcome {
         if (!state.assignments) {
@@ -231,11 +231,9 @@ const INSTRUCTION = [
   "(1) searchPlaces to find candidate attractions near the accommodation;",
   "(2) getPlaceDetails for the places you'll use — including every must-visit (use its placeId);",
   "(3) clusterByDay to spread the detailed places across the requested number of days;",
-  "(4) assembleItinerary to lay out a draft (visits, transit, meals);",
+  "(4) assembleItinerary to lay out a draft (visits, transit, meals) — it honours opening hours;",
   "(5) finalizeItinerary to validate and finish.",
-  "If finalize reports hard violations, fix them and retry:",
-  "for CLOSED_HOURS, call assembleItinerary again with respectWindows:true;",
-  "for DAY_TOO_TIGHT, call rebalanceDays, then assembleItinerary, then finalize again.",
+  "If finalize reports DAY_TOO_TIGHT, call rebalanceDays, then assembleItinerary, then finalize again.",
   "clusterByDay, rebalanceDays, assembleItinerary and finalizeItinerary operate on the data",
   "you've already gathered. Stop once finalizeItinerary succeeds.",
 ].join(" ");
