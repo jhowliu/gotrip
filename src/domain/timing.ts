@@ -3,7 +3,7 @@
  * Pure functions — independently testable, no I/O.
  */
 
-import type { ItineraryItem } from "./itinerary";
+import type { ItineraryItem, Pace } from "./itinerary";
 
 /** Category → typical visit minutes. The primary path when details lack an estimate. */
 export const DEFAULT_VISIT_MINUTES: Readonly<Record<string, number>> = {
@@ -49,4 +49,39 @@ export function addMinutes(hhmm: string, delta: number): string {
 /** endTime is derived, never stored. */
 export function endTime(item: Pick<ItineraryItem, "startTime" | "durationMinutes">): string {
   return addMinutes(item.startTime, item.durationMinutes);
+}
+
+/** Each day starts here. */
+export const DAY_START = "09:00";
+
+/** Buffer added to every transit leg, absorbing headway/transfer variance. */
+export const TRANSIT_BUFFER_MINUTES = 10;
+
+/**
+ * Latest a day should end, by pace. Relaxed days end earlier (more slack);
+ * packed days run later. Used by the DAY_TOO_TIGHT check.
+ */
+export function paceDayEndCap(pace?: Pace): string {
+  if (pace === "relaxed") return "19:00";
+  if (pace === "packed") return "21:00";
+  return "20:00";
+}
+
+export interface MealSlot {
+  label: string;
+  window: [string, string];
+  preferredStart: string;
+  durationMinutes: number;
+}
+
+export const MEAL_SLOTS: readonly MealSlot[] = [
+  { label: "Lunch", window: ["11:30", "13:30"], preferredStart: "12:00", durationMinutes: 60 },
+  { label: "Dinner", window: ["18:00", "20:00"], preferredStart: "18:30", durationMinutes: 60 },
+];
+
+/** Is [start, start+duration] fully inside [window.0, window.1]? */
+export function withinWindow(start: string, durationMinutes: number, window: [string, string]): boolean {
+  const s = toMinutes(start);
+  const e = s + durationMinutes;
+  return s >= toMinutes(window[0]) && e <= toMinutes(window[1]);
 }

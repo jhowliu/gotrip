@@ -75,3 +75,41 @@ export const TOKYO_PLACES: PlaceDetail[] = [
     ticketPrice: 0,
   },
 ];
+
+// --- Adversarial fixture: a must-visit with a narrow morning window ---
+// A naive (geometry-only) schedule visits it late → CLOSED_HOURS; the agent must
+// re-plan with respectWindows so it lands inside 09:00–10:30.
+
+export const ADVERSARIAL_ACCOMMODATION: Location = {
+  name: "Center Hotel",
+  lat: 35.69,
+  lng: 139.7,
+};
+
+export const ADVERSARIAL_NARROW_WINDOW: PlaceDetail[] = [
+  {
+    placeId: "a_near",
+    name: "Near Cafe",
+    category: "cafe",
+    location: { name: "Near Cafe", lat: 35.692, lng: 139.702 },
+    estimatedVisitMinutes: 60,
+    ticketPrice: 0,
+  },
+  {
+    placeId: "a_mid",
+    name: "Mid Park",
+    category: "park",
+    location: { name: "Mid Park", lat: 35.7, lng: 139.72 },
+    estimatedVisitMinutes: 60,
+    ticketPrice: 0,
+  },
+  {
+    placeId: "a_sunrise",
+    name: "Sunrise Museum",
+    category: "museum",
+    location: { name: "Sunrise Museum", lat: 35.72, lng: 139.78 },
+    estimatedVisitMinutes: 60,
+    openWindow: ["09:00", "10:30"],
+    ticketPrice: 0,
+  },
+];

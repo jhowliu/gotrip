@@ -17,6 +17,7 @@ import type {
   ModelToolSpec,
   ModelTurn,
 } from "../../application/ports/ModelClient";
+import type { TokenUsage, Tracer } from "../../application/agent/trace";
 
 type ChatMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 type ChatTool = OpenAI.Chat.Completions.ChatCompletionTool;
@@ -92,9 +93,23 @@ export function fromOpenAIMessage(message: ChatResponseMessage): ModelTurn {
   return { kind: "message", text: message.content ?? "" };
 }
 
+/** OpenAI usage → our neutral TokenUsage. (pure) */
+export function mapUsage(
+  usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null | undefined,
+): TokenUsage | undefined {
+  if (!usage) return undefined;
+  const mapped: TokenUsage = {};
+  if (typeof usage.prompt_tokens === "number") mapped.promptTokens = usage.prompt_tokens;
+  if (typeof usage.completion_tokens === "number") mapped.completionTokens = usage.completion_tokens;
+  if (typeof usage.total_tokens === "number") mapped.totalTokens = usage.total_tokens;
+  return mapped;
+}
+
 export interface OpenAIModelClientOptions {
   apiKey?: string; // defaults to OPENAI_API_KEY
   baseURL?: string;
+  /** Logs the OpenAI request, response, and token usage to the trace. */
+  tracer?: Tracer;
 }
 
 export function createOpenAIModelClient(options: OpenAIModelClientOptions = {}): ModelClient {
@@ -102,17 +117,35 @@ export function createOpenAIModelClient(options: OpenAIModelClientOptions = {}):
     ...(options.apiKey ? { apiKey: options.apiKey } : {}),
     ...(options.baseURL ? { baseURL: options.baseURL } : {}),
   });
+  const trace = options.tracer;
 
   return {
     async next(req: ModelRequest): Promise<ModelTurn> {
-      const response = await client.chat.completions.create({
-        model: req.model,
-        messages: toOpenAIMessages(req.instruction, req.history),
-        tools: toOpenAITools(req.tools),
-        tool_choice: "auto",
-      });
+      const messages = toOpenAIMessages(req.instruction, req.history);
+      const tools = toOpenAITools(req.tools);
+      trace?.({ type: "model_request", model: req.model, messages, tools });
+
+      let response;
+      try {
+        response = await client.chat.completions.create({
+          model: req.model,
+          messages,
+          tools,
+          tool_choice: "auto",
+        });
+      } catch (err) {
+        trace?.({ type: "model_error", model: req.model, message: err instanceof Error ? err.message : String(err) });
+        throw err;
+      }
 
       const message = response.choices[0]?.message;
+      trace?.({
+        type: "model_response",
+        model: response.model,
+        output: message ?? null,
+        ...(mapUsage(response.usage) ? { usage: mapUsage(response.usage) } : {}),
+      });
+
       if (!message) return { kind: "message", text: "" };
       return fromOpenAIMessage(message);
     },

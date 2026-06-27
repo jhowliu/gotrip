@@ -11,6 +11,7 @@ import type {
   ToolProvider,
 } from "../../../application/ports/ToolProvider";
 import { haversineMeters } from "../../../domain/clusterByDay";
+import { estimateTravelMinutes } from "../../../domain/travel";
 
 const RESTAURANT_CATEGORIES = new Set(["restaurant", "cafe"]);
 
@@ -56,13 +57,10 @@ export function createMockToolProvider(places: PlaceDetail[]): ToolProvider {
     },
 
     async getTravelTime(input: GetTravelTimeInput) {
-      const meters = haversineMeters(input.origin, input.destination);
       const mode = input.mode ?? "transit";
-      const metersPerMin = mode === "walking" ? 80 : mode === "driving" ? 600 : 400;
-      const wait = mode === "transit" ? 5 : 0;
       return {
-        durationMinutes: Math.round(meters / metersPerMin) + wait,
-        distanceMeters: Math.round(meters),
+        durationMinutes: estimateTravelMinutes(input.origin, input.destination, mode),
+        distanceMeters: Math.round(haversineMeters(input.origin, input.destination)),
         mode,
       };
     },

@@ -6,6 +6,7 @@
   "description": "A travel-planning ReAct agent — reusable agent-development skill with trip planning as the carrier.",
   "scripts": {
     "dev": "tsx src/interface/cli.ts",
+    "dev:env": "tsx --env-file=.env src/interface/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
