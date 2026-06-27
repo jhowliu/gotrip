@@ -15,19 +15,37 @@ import { createMockToolProvider } from "../infrastructure/tools/mock/mockToolPro
 import { createScriptedColdStartModel } from "../infrastructure/llm/scriptedModelClient";
 import { createOpenAIModelClient } from "../infrastructure/llm/openaiModelClient";
 import { createFileTracer } from "../infrastructure/observability/fileTracer";
-import { TOKYO_ACCOMMODATION, TOKYO_PLACES } from "../infrastructure/tools/mock/fixtures";
+import {
+  ADVERSARIAL_ACCOMMODATION,
+  ADVERSARIAL_NARROW_WINDOW,
+  TOKYO_ACCOMMODATION,
+  TOKYO_PLACES,
+} from "../infrastructure/tools/mock/fixtures";
 
 async function main(): Promise<void> {
-  const request: TripRequest = {
-    days: 2,
-    destination: "Tokyo",
-    accommodation: TOKYO_ACCOMMODATION,
-    mustVisit: [{ name: "teamLab Planets", placeId: "p_teamlab" }],
-    pace: "relaxed",
-  };
+  // `... -- adversarial` runs the narrow-opening-window fixture, which trips
+  // CLOSED_HOURS so you can watch the agent detect it and re-plan in the trace.
+  const adversarial = process.argv.slice(2).includes("adversarial");
 
-  const provider = createMockToolProvider(TOKYO_PLACES);
+  const request: TripRequest = adversarial
+    ? {
+        days: 1,
+        destination: "Tokyo",
+        accommodation: ADVERSARIAL_ACCOMMODATION,
+        mustVisit: [{ name: "Sunrise Museum", placeId: "a_sunrise" }],
+        pace: "relaxed",
+      }
+    : {
+        days: 2,
+        destination: "Tokyo",
+        accommodation: TOKYO_ACCOMMODATION,
+        mustVisit: [{ name: "teamLab Planets", placeId: "p_teamlab" }],
+        pace: "relaxed",
+      };
+
+  const provider = createMockToolProvider(adversarial ? ADVERSARIAL_NARROW_WINDOW : TOKYO_PLACES);
   const spec = createColdStartSpec(request, provider);
+  console.log(`scenario: ${adversarial ? "adversarial (narrow opening window)" : "tokyo (happy path)"}`);
 
   let model: ModelClient;
   if (process.env.OPENAI_API_KEY) {
