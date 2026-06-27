@@ -125,7 +125,7 @@ function placeDueMeals(
   return c;
 }
 
-function dayStartTime(dayIndex: number, request: ScheduleInput["request"]): string {
+export function dayStartTime(dayIndex: number, request: TripRequest): string {
   if (dayIndex === 1 && request.arrival) {
     const ready = addMinutes(timeOfDayFromIso(request.arrival.datetime), ARRIVAL_TRANSFER_MINUTES);
     return toMinutes(ready) > toMinutes(DAY_START) ? ready : DAY_START;
@@ -133,22 +133,55 @@ function dayStartTime(dayIndex: number, request: ScheduleInput["request"]): stri
   return DAY_START;
 }
 
-function scheduleDay(assignment: DayAssignment, input: ScheduleInput, start: GeoLocation | null): ItineraryDay {
-  const ordered = orderPlaces(assignment.placeIds, input, start);
+/** A visit resolved into everything the day layout needs. */
+export interface LayoutVisit {
+  placeId: string;
+  name: string;
+  durationMinutes: number;
+  location: GeoLocation;
+  openWindow?: [string, string];
+  pinned?: boolean;
+  estimatedCost?: number;
+}
+
+export function toLayoutVisit(place: PlaceDetail, mustVisitIds?: ReadonlySet<string>): LayoutVisit {
+  return {
+    placeId: place.placeId,
+    name: place.name,
+    durationMinutes: visitMinutes(place.category, place.estimatedVisitMinutes),
+    location: place.location,
+    ...(place.openWindow ? { openWindow: place.openWindow } : {}),
+    ...(mustVisitIds?.has(place.placeId) ? { pinned: true } : {}),
+    ...(typeof place.ticketPrice === "number" ? { estimatedCost: place.ticketPrice } : {}),
+  };
+}
+
+/**
+ * Lay out one day from an ordered visit list: transit items between visits,
+ * meals in their windows, opening-window-aware start times. Shared by the cold
+ * scheduler and applyEdits (which preserves the user's order).
+ */
+export function layoutDay(
+  dayIndex: number,
+  ordered: LayoutVisit[],
+  dayStart: string,
+  legMinutes: (a: GeoLocation, b: GeoLocation) => number,
+  respectWindows = true,
+): ItineraryItem[] {
   const items: ItineraryItem[] = [];
   const pending = [...MEAL_SLOTS];
-  let cursor = dayStartTime(assignment.dayIndex, input.request);
-  let prev: PlaceDetail | null = null;
+  let cursor = dayStart;
+  let prev: LayoutVisit | null = null;
   let seq = 0;
 
-  for (const place of ordered) {
+  for (const v of ordered) {
     if (prev) {
-      const dur = input.legMinutes(prev.location, place.location) + TRANSIT_BUFFER_MINUTES;
+      const dur = legMinutes(prev.location, v.location) + TRANSIT_BUFFER_MINUTES;
       seq += 1;
       items.push({
-        itemId: `d${assignment.dayIndex}-t${seq}`,
+        itemId: `d${dayIndex}-t${seq}`,
         kind: "transit",
-        name: `Transit to ${place.name}`,
+        name: `Transit to ${v.name}`,
         startTime: cursor,
         durationMinutes: dur,
         mode: "transit",
@@ -156,30 +189,43 @@ function scheduleDay(assignment: DayAssignment, input: ScheduleInput, start: Geo
       cursor = addMinutes(cursor, dur);
     }
 
-    cursor = placeDueMeals(items, pending, cursor, assignment.dayIndex);
+    cursor = placeDueMeals(items, pending, cursor, dayIndex);
 
     let start_ = cursor;
-    if ((input.options?.respectWindows ?? true) && place.openWindow && toMinutes(start_) < toMinutes(place.openWindow[0])) {
-      start_ = place.openWindow[0]; // wait until it opens
+    if (respectWindows && v.openWindow && toMinutes(start_) < toMinutes(v.openWindow[0])) {
+      start_ = v.openWindow[0]; // wait until it opens
     }
-    const duration = visitMinutes(place.category, place.estimatedVisitMinutes);
     seq += 1;
     items.push({
-      itemId: `d${assignment.dayIndex}-v${seq}`,
+      itemId: `d${dayIndex}-v${seq}`,
       kind: "visit",
-      placeId: place.placeId,
-      name: place.name,
+      placeId: v.placeId,
+      name: v.name,
       startTime: start_,
-      durationMinutes: duration,
-      ...(input.mustVisitIds?.has(place.placeId) ? { pinned: true } : {}),
-      ...(typeof place.ticketPrice === "number" ? { estimatedCost: place.ticketPrice } : {}),
+      durationMinutes: v.durationMinutes,
+      ...(v.pinned ? { pinned: true } : {}),
+      ...(typeof v.estimatedCost === "number" ? { estimatedCost: v.estimatedCost } : {}),
     });
-    cursor = addMinutes(start_, duration);
-    prev = place;
+    cursor = addMinutes(start_, v.durationMinutes);
+    prev = v;
   }
 
-  placeDueMeals(items, pending, cursor, assignment.dayIndex);
+  placeDueMeals(items, pending, cursor, dayIndex);
   items.sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
+  return items;
+}
+
+function scheduleDay(assignment: DayAssignment, input: ScheduleInput, start: GeoLocation | null): ItineraryDay {
+  const ordered = orderPlaces(assignment.placeIds, input, start).map((p) =>
+    toLayoutVisit(p, input.mustVisitIds),
+  );
+  const items = layoutDay(
+    assignment.dayIndex,
+    ordered,
+    dayStartTime(assignment.dayIndex, input.request),
+    input.legMinutes,
+    input.options?.respectWindows ?? true,
+  );
   return { dayIndex: assignment.dayIndex, items };
 }
 
