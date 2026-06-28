@@ -2,9 +2,9 @@
  * M5 HTTP layer — a thin Hono adapter over the existing use cases. The inner
  * layers are untouched: routes just call cold-start planning, deterministic
  * applyEdits (drag-and-drop), and the warm-edit agent (chat), all behind the
- * same ports M0–M3 used. Serves the interactive page at `/`.
+ * same ports M0–M3 used. API-only; the React app (packages/web) is the UI.
  *
- *   pnpm serve   # http://localhost:8787  (chat needs OPENAI_API_KEY)
+ *   npm run serve   # http://localhost:8787  (chat needs OPENAI_API_KEY)
  */
 
 import { serve } from "@hono/node-server";
@@ -27,7 +27,6 @@ import { createMockToolProvider } from "../../infrastructure/tools/mock/mockTool
 import { createScriptedColdStartModel } from "../../infrastructure/llm/scriptedModelClient";
 import { createOpenAIModelClient } from "../../infrastructure/llm/openaiModelClient";
 import { TOKYO_ACCOMMODATION, TOKYO_PLACES } from "../../infrastructure/tools/mock/fixtures";
-import { INDEX_HTML } from "./page";
 
 const legMinutes = (a: GeoLocation, b: GeoLocation): number => estimateTravelMinutes(a, b, "transit");
 const store = createFileSessionStore("data/sessions");
@@ -49,7 +48,7 @@ const tripRequestSchema = z
 const app = new Hono();
 app.use("/api/*", cors());
 
-app.get("/", (c) => c.html(INDEX_HTML));
+app.get("/", (c) => c.json({ app: "gotrip api", ui: "run the web app: npm run web (vite dev on :5173)" }));
 
 app.get("/api/config", (c) => c.json({ chatEnabled: hasOpenAI() }));
 
