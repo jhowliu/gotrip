@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>gotrip</title>
+<style>
+  :root { --bg:#faf9f5; --surf:#ffffff; --ink:#1d1c1a; --mut:#6b6a64; --line:#e6e4dc; --accent:#2a78d6; --accent-bg:#e6f1fb; --amber:#a8730a; --amber-bg:#faeeda; --red:#a32d2d; --red-bg:#fcebeb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; align-items:center; gap:12px; padding:14px 20px; border-bottom:1px solid var(--line); background:var(--surf); position:sticky; top:0; z-index:2; }
+  header .brand { font-weight:600; font-size:16px; }
+  header .sub { color:var(--mut); font-size:13px; }
+  header .spacer { flex:1; }
+  .pill { font-size:12px; padding:3px 9px; border-radius:99px; border:1px solid var(--line); color:var(--mut); }
+  .pill.on { color:#0f6e56; background:#e1f5ee; border-color:#bfe6d8; }
+  button { font:inherit; font-size:13px; padding:6px 12px; border:1px solid var(--line); background:var(--surf); border-radius:8px; cursor:pointer; color:var(--ink); }
+  button:hover { background:#f3f1ea; }
+  main { max-width:920px; margin:0 auto; padding:18px 20px 120px; }
+  #banner .v { font-size:13px; padding:8px 12px; border-radius:8px; margin-bottom:8px; }
+  #banner .hard { background:var(--red-bg); color:var(--red); }
+  #banner .soft { background:var(--amber-bg); color:var(--amber); }
+  #board { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:14px; margin-top:8px; }
+  .daycol { background:var(--surf); border:1px solid var(--line); border-radius:12px; padding:12px 12px 16px; min-height:120px; }
+  .daycol.over { border-color:var(--accent); background:var(--accent-bg); }
+  .dayhead { font-weight:600; font-size:14px; margin-bottom:8px; }
+  .trans { font-size:12px; color:var(--mut); padding:3px 4px 3px 8px; }
+  .card { border:1px solid var(--line); border-radius:10px; padding:8px 10px; margin:6px 0; background:var(--surf); }
+  .card.visit { cursor:grab; }
+  .card.visit:active { cursor:grabbing; }
+  .card.pinned { border:2px solid var(--accent); }
+  .card.meal { background:var(--amber-bg); border-color:#eed9b0; }
+  .cardtop { display:flex; align-items:center; gap:7px; }
+  .t { font-size:12px; color:var(--mut); font-variant-numeric:tabular-nums; }
+  .nm { font-weight:500; font-size:14px; }
+  .badge { font-size:11px; color:var(--accent); background:var(--accent-bg); padding:1px 7px; border-radius:6px; margin-left:auto; }
+  .meta { font-size:12px; color:var(--mut); margin-top:2px; }
+  .acts { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
+  .acts button { padding:3px 8px; font-size:12px; border-radius:6px; }
+  .empty { color:var(--mut); padding:30px; text-align:center; }
+  footer { position:fixed; bottom:0; left:0; right:0; background:var(--surf); border-top:1px solid var(--line); padding:12px 20px; }
+  #chatForm { max-width:920px; margin:0 auto; display:flex; gap:8px; }
+  #chatInput { flex:1; font:inherit; font-size:14px; padding:9px 12px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+  #toast { position:fixed; bottom:74px; left:50%; transform:translateX(-50%); background:var(--ink); color:#fff; font-size:13px; padding:9px 16px; border-radius:8px; opacity:0; transition:opacity .2s; pointer-events:none; max-width:80%; }
+  #toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">gotrip</span>
+  <span class="sub" id="sub">no itinerary</span>
+  <span class="spacer"></span>
+  <span class="pill" id="chatStatus">chat off</span>
+  <button id="planBtn">Plan / replan</button>
+</header>
+<main>
+  <div id="banner"></div>
+  <div id="board"></div>
+</main>
+<footer>
+  <form id="chatForm">
+    <input id="chatInput" placeholder="Move Senso-ji to the morning…" autocomplete="off" />
+    <button type="submit">Send</button>
+  </form>
+</footer>
+<div id="toast"></div>
+
+<script>
+const SID = "demo";
+const state = { itinerary: null, validation: null, chatEnabled: false };
+
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+let toastT;
+function toast(msg){ const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 3200); }
+
+async function api(path, opts){
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  return { ok: r.ok, status: r.status, data };
+}
+
+async function boot(){
+  const cfg = await api("/api/config");
+  state.chatEnabled = !!cfg.data.chatEnabled;
+  const cs = document.getElementById("chatStatus");
+  cs.textContent = state.chatEnabled ? "chat on" : "chat off (set OPENAI_API_KEY)";
+  cs.classList.toggle("on", state.chatEnabled);
+  const r = await api("/api/sessions/" + SID);
+  if (r.ok) { state.itinerary = r.data.itinerary; state.validation = r.data.validation; }
+  render();
+}
+
+async function plan(){
+  toast("Planning…");
+  const request = { days:2, destination:"Tokyo", accommodation:{ name:"Shinjuku Hotel", lat:35.6938, lng:139.7034 }, mustVisit:[{ name:"teamLab Planets", placeId:"p_teamlab" }], pace:"relaxed" };
+  const r = await api("/api/sessions/" + SID + "/plan", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify(request) });
+  if (!r.ok) { toast(r.data.error || "plan failed"); return; }
+  state.itinerary = r.data.itinerary; state.validation = r.data.validation; render(); toast("Planned");
+}
+
+async function ops(operations){
+  const r = await api("/api/sessions/" + SID + "/ops", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ operations }) });
+  if (!r.ok) { toast(r.data.error || "edit rejected"); return; }
+  state.itinerary = r.data.itinerary; state.validation = r.data.validation;
+  if (r.data.errors && r.data.errors.length) toast(r.data.errors[0]);
+  else if (!r.data.changed) toast("no change");
+  render();
+}
+
+async function chat(instruction){
+  if (!state.chatEnabled) { toast("chat needs OPENAI_API_KEY on the server"); return; }
+  toast("Thinking…");
+  const r = await api("/api/sessions/" + SID + "/chat", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ instruction }) });
+  if (!r.ok) { toast(r.data.error || "chat failed"); return; }
+  state.itinerary = r.data.itinerary; state.validation = r.data.validation;
+  if (r.data.finalized) toast("Applied");
+  else { const h = (r.data.validation && r.data.validation.hardViolations || [])[0]; toast("Conflict — not applied. " + (h ? h.message : "see report")); }
+  render();
+}
+
+function renderItem(item, day){
+  if (item.kind === "transit") return '<div class="trans">↓ ' + item.durationMinutes + ' min transit</div>';
+  if (item.kind === "meal") return '<div class="card meal"><span class="t">' + item.startTime + '</span> <span class="nm">' + esc(item.name) + '</span> <span class="meta" style="display:inline;margin-left:6px;">' + item.durationMinutes + ' min</span></div>';
+  const cost = item.estimatedCost > 0 ? "¥" + item.estimatedCost.toLocaleString() : "free";
+  const badge = item.pinned ? '<span class="badge">★ must</span>' : "";
+  return '<div class="card visit' + (item.pinned ? " pinned" : "") + '" draggable="true" data-item="' + item.itemId + '" data-day="' + day + '" data-dur="' + item.durationMinutes + '">'
+    + '<div class="cardtop"><span class="t">' + item.startTime + '</span> <span class="nm">' + esc(item.name) + '</span>' + badge + '</div>'
+    + '<div class="meta">' + item.durationMinutes + ' min · ' + cost + '</div>'
+    + '<div class="acts">'
+    +   '<button data-act="morning">morning</button>'
+    +   '<button data-act="plus">+30</button>'
+    +   '<button data-act="minus">−30</button>'
+    +   '<button data-act="pin">pin</button>'
+    +   '<button data-act="remove">remove</button>'
+    + '</div></div>';
+}
+
+function renderBanner(){
+  const b = document.getElementById("banner"); const v = state.validation; let html = "";
+  if (v) {
+    for (const h of (v.hardViolations || [])) html += '<div class="v hard">⛔ ' + esc(h.code) + " — " + esc(h.message) + "</div>";
+    for (const s of (v.softWarnings || [])) html += '<div class="v soft">⚠ ' + esc(s.code) + " — " + esc(s.message) + "</div>";
+  }
+  b.innerHTML = html;
+}
+
+function render(){
+  renderBanner();
+  const board = document.getElementById("board");
+  const it = state.itinerary;
+  if (!it) { document.getElementById("sub").textContent = "no itinerary"; board.innerHTML = '<div class="empty">No itinerary yet — click “Plan / replan”.</div>'; return; }
+  document.getElementById("sub").textContent = it.request.destination + " · " + it.days.length + " days · ¥" + (it.totalCost || 0).toLocaleString();
+  let html = "";
+  for (const day of it.days) {
+    const visits = day.items.filter(i => i.kind === "visit").length;
+    html += '<div class="daycol" data-daycol="' + day.dayIndex + '"><div class="dayhead">Day ' + day.dayIndex + " · " + visits + " visits</div>";
+    for (const item of day.items) html += renderItem(item, day.dayIndex);
+    html += "</div>";
+  }
+  board.innerHTML = html;
+}
+
+function onClick(e){
+  const btn = e.target.closest("button[data-act]"); if (!btn) return;
+  const card = btn.closest("[data-item]"); if (!card) return;
+  const itemId = card.dataset.item, day = +card.dataset.day, dur = +card.dataset.dur, act = btn.dataset.act;
+  if (act === "morning") ops([{ op:"move", itemId, toDay: day, atTime:"09:00" }]);
+  else if (act === "plus") ops([{ op:"setDuration", itemId, minutes: dur + 30 }]);
+  else if (act === "minus") ops([{ op:"setDuration", itemId, minutes: Math.max(15, dur - 30) }]);
+  else if (act === "pin") ops([{ op:"pin", itemId }]);
+  else if (act === "remove") ops([{ op:"remove", itemId }]);
+}
+function onDragStart(e){ const card = e.target.closest('[data-item][draggable="true"]'); if (!card) return; e.dataTransfer.setData("text/plain", card.dataset.item); e.dataTransfer.effectAllowed = "move"; }
+function onDragOver(e){ const col = e.target.closest("[data-daycol]"); if (col) { e.preventDefault(); col.classList.add("over"); } }
+function onDragLeave(e){ const col = e.target.closest("[data-daycol]"); if (col) col.classList.remove("over"); }
+function onDrop(e){ const col = e.target.closest("[data-daycol]"); if (!col) return; e.preventDefault(); col.classList.remove("over"); const itemId = e.dataTransfer.getData("text/plain"); if (itemId) ops([{ op:"move", itemId, toDay: +col.dataset.daycol }]); }
+
+document.getElementById("planBtn").addEventListener("click", plan);
+document.getElementById("chatForm").addEventListener("submit", e => { e.preventDefault(); const i = document.getElementById("chatInput"); const v = i.value.trim(); if (v) { chat(v); i.value = ""; } });
+const board = document.getElementById("board");
+board.addEventListener("click", onClick);
+board.addEventListener("dragstart", onDragStart);
+board.addEventListener("dragover", onDragOver);
+board.addEventListener("dragleave", onDragLeave);
+board.addEventListener("drop", onDrop);
+boot();
+</script>
+</body>
+</html>

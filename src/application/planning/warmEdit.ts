@@ -23,6 +23,7 @@ import type {
   ValidationResult,
 } from "../../domain/itinerary";
 import { applyEdits, type EditOp } from "../../domain/applyEdits";
+import { editOpsSchema } from "../editing/editOps";
 import { validate } from "../../domain/validate";
 import { estimateTravelMinutes } from "../../domain/travel";
 
@@ -35,15 +36,7 @@ export interface WarmEditState {
 
 const legMinutes = (a: GeoLocation, b: GeoLocation): number => estimateTravelMinutes(a, b, "transit");
 
-const editOpSchema = z.discriminatedUnion("op", [
-  z.object({ op: z.literal("move"), itemId: z.string(), toDay: z.number().int().positive(), atTime: z.string().optional() }),
-  z.object({ op: z.literal("add"), placeId: z.string(), day: z.number().int().positive() }),
-  z.object({ op: z.literal("remove"), itemId: z.string() }),
-  z.object({ op: z.literal("setDuration"), itemId: z.string(), minutes: z.number().int().positive() }),
-  z.object({ op: z.literal("pin"), itemId: z.string() }),
-]);
-
-const applyEditsSchema = z.object({ operations: z.array(editOpSchema).min(1) });
+const applyEditsSchema = z.object({ operations: editOpsSchema });
 const searchSchema = z.object({
   query: z.string(),
   type: z.enum(["attraction", "restaurant"]).optional(),
