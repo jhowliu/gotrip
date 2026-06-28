@@ -72,20 +72,27 @@ export default function App(): JSX.Element {
         busy={busy}
         onPlan={plan}
       />
-      <main className="main">
+      <main className="mx-auto max-w-[920px] px-5 pb-[120px] pt-[18px]">
         <Banner validation={validation} />
         {itinerary ? (
-          <div className="board">
+          <div className="mt-2 grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-3.5">
             {itinerary.days.map((d) => (
               <DayColumn key={d.dayIndex} day={d} onOp={onOp} />
             ))}
           </div>
         ) : (
-          <div className="empty">No itinerary yet — click “Plan / replan”.</div>
+          <div className="p-8 text-center text-mut">No itinerary yet — click “Plan / replan”.</div>
         )}
       </main>
       <ChatBar enabled={chatEnabled} onSend={onChat} />
-      <div className={"toast" + (toast ? " show" : "")}>{toast}</div>
+      <div
+        className={
+          "pointer-events-none fixed bottom-[74px] left-1/2 max-w-[80%] -translate-x-1/2 rounded-lg bg-ink px-4 py-[9px] text-[13px] text-white transition-opacity " +
+          (toast ? "opacity-100" : "opacity-0")
+        }
+      >
+        {toast}
+      </div>
     </>
   );
 }
