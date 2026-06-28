@@ -101,7 +101,8 @@ export function applyEdits(itinerary: Itinerary, ops: EditOp[], deps: ApplyEdits
         if (op.atTime) {
           moved.startTime = op.atTime;
           const at = toMinutes(op.atTime);
-          const pos = target.findIndex((v) => toMinutes(v.startTime) > at);
+          // Insert before the first item at or after the requested time.
+          const pos = target.findIndex((v) => toMinutes(v.startTime) >= at);
           if (pos < 0) target.push(moved);
           else target.splice(pos, 0, moved);
         } else {

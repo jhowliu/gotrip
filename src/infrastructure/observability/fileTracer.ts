@@ -41,6 +41,8 @@ function humanLine(event: TraceEvent): string | null {
       return `  ← ${event.name} ${event.isError ? "ERROR" : "ok"}${event.final ? " [final]" : ""}: ${preview(event.output)}`;
     case "model_message":
       return `  · model: ${event.text}`;
+    case "escalation":
+      return `  ⤴ no progress — escalating ${event.from} → ${event.to}`;
     case "finish":
       return `= ${event.status} after ${event.iterations} iteration(s)`;
     default:

@@ -8,3 +8,6 @@ dist/
 coverage/
 .vitest/
 logs/
+
+# Local session store (FileSessionStore)
+data/
