@@ -95,7 +95,8 @@ async function main(): Promise<void> {
   console.log(`trace: ${logPath}`);
 
   if (argv.includes("edit")) {
-    await runEditDemo(useOpenAI, tracer);
+    const customInstruction = argv.slice(argv.indexOf("edit") + 1).join(" ").trim();
+    await runEditDemo(useOpenAI, tracer, customInstruction);
     return;
   }
 
@@ -138,7 +139,7 @@ async function main(): Promise<void> {
 }
 
 /** Phase 3 demo: cold-start a plan, persist it, then run one natural-language edit. */
-async function runEditDemo(useOpenAI: boolean, tracer: Tracer): Promise<void> {
+async function runEditDemo(useOpenAI: boolean, tracer: Tracer, customInstruction = ""): Promise<void> {
   const provider = createMockToolProvider(TOKYO_PLACES);
   const request: TripRequest = {
     days: 2,
@@ -168,21 +169,31 @@ async function runEditDemo(useOpenAI: boolean, tracer: Tracer): Promise<void> {
   console.log("\n=== base itinerary (saved to data/sessions/demo.json) ===");
   console.log(formatItineraryText(loaded));
 
-  // 3) Warm-edit it from a natural-language instruction. Target the last visit of
-  //    day 1 so the demo works regardless of which places the planner picked.
+  // 3) Warm-edit from an instruction. With OpenAI, any free-text instruction is
+  //    translated by the model. The scripted model can't parse free text, so it
+  //    runs a canned "move the last day-1 visit to the morning" edit.
   const day1Visits = (loaded.days[0]?.items ?? []).filter((i) => i.kind === "visit");
   const target = day1Visits[day1Visits.length - 1];
   if (!target) {
     console.log("day 1 has no visit to move; aborting edit.");
     return;
   }
-  const instruction = `Move ${target.name} to the morning of day 1.`;
+
+  let instruction: string;
+  let warmModel: ModelClient;
+  if (useOpenAI) {
+    instruction = customInstruction || `Move ${target.name} to the morning of day 1.`;
+    warmModel = createOpenAIModelClient({ tracer });
+  } else {
+    if (customInstruction) {
+      console.log('note: free-text edits need OPENAI_API_KEY; running the canned "move to morning" demo instead.');
+    }
+    instruction = `Move ${target.name} to the morning of day 1.`;
+    warmModel = createScriptedWarmModel([{ op: "move", itemId: target.itemId, toDay: 1, atTime: "09:00" }] as EditOp[]);
+  }
   console.log(`\nuser: "${instruction}"`);
 
   const details = await resolveItineraryDetails(loaded, provider);
-  const warmModel: ModelClient = useOpenAI
-    ? createOpenAIModelClient({ tracer })
-    : createScriptedWarmModel([{ op: "move", itemId: target.itemId, toDay: 1, atTime: "09:00" }] as EditOp[]);
 
   const editResult = await runAgent(createWarmEditSpec(loaded, instruction, provider, details), warmModel, tracer);
   console.log(`\nedit status: ${editResult.status} — hard violations: ${editResult.validation.hardViolations.length}`);
