@@ -6,6 +6,7 @@ export default function App(): JSX.Element {
   const [itinerary, setItinerary] = useState<Itinerary | null>(null);
   const [validation, setValidation] = useState<Validation | null>(null);
   const [chatEnabled, setChatEnabled] = useState(false);
+  const [provider, setProvider] = useState("");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
 
@@ -18,6 +19,7 @@ export default function App(): JSX.Element {
     void (async () => {
       const cfg = await getConfig();
       setChatEnabled(Boolean(cfg.data.chatEnabled));
+      setProvider(cfg.data.provider ?? "");
       const s = await loadSession();
       if (s.ok) {
         setItinerary(s.data.itinerary);
@@ -69,6 +71,7 @@ export default function App(): JSX.Element {
         days={itinerary?.days.length ?? 0}
         totalCost={itinerary?.totalCost ?? 0}
         chatEnabled={chatEnabled}
+        provider={provider}
         busy={busy}
         onPlan={plan}
       />

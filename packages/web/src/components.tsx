@@ -8,9 +8,11 @@ export function Header(props: {
   days: number;
   totalCost: number;
   chatEnabled: boolean;
+  provider: string;
   busy: boolean;
   onPlan: () => void;
 }): JSX.Element {
+  const live = props.provider === "google";
   return (
     <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-line bg-white px-5 py-3.5">
       <span className="text-base font-semibold">gotrip</span>
@@ -18,6 +20,15 @@ export function Header(props: {
         {props.destination} · {props.days} days · {yen(props.totalCost)}
       </span>
       <span className="flex-1" />
+      <span
+        className={
+          "rounded-full border px-2.5 py-[3px] text-xs " +
+          (live ? "border-okline bg-okbg text-okfg" : "border-line text-mut")
+        }
+        title={live ? "real Google data" : "static mock fixtures — run serve:env with GOOGLE_MAPS_API_KEY for live data"}
+      >
+        data: {props.provider || "?"}
+      </span>
       <span
         className={
           "rounded-full border px-2.5 py-[3px] text-xs " +

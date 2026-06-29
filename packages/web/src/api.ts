@@ -90,7 +90,7 @@ export interface SessionPayload {
   error?: string;
 }
 
-export const getConfig = (): Promise<ApiResult<{ chatEnabled: boolean }>> => call("/api/config");
+export const getConfig = (): Promise<ApiResult<{ chatEnabled: boolean; provider?: string }>> => call("/api/config");
 
 export const loadSession = (): Promise<ApiResult<SessionPayload>> => call(`/api/sessions/${SID}`);
 
