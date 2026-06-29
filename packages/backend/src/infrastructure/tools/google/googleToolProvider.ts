@@ -77,11 +77,13 @@ export function createGoogleToolProvider(opts: GoogleProviderOptions): ToolProvi
 
     async getTravelTime(input: GetTravelTimeInput): Promise<TravelTime> {
       const mode = input.mode ?? "transit";
-      const body = {
+      const body: Record<string, unknown> = {
         origin: { location: { latLng: latLng(input.origin) } },
         destination: { location: { latLng: latLng(input.destination) } },
         travelMode: TRAVEL_MODE[mode],
       };
+      // TRANSIT needs a departure time or Google returns no route.
+      if (mode === "transit") body.departureTime = new Date(Date.now() + 60_000).toISOString();
       const data = await requestJson<GoogleRoutesResponse>(ROUTES_URL, {
         method: "POST",
         headers: {
