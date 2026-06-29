@@ -80,9 +80,9 @@ export const loadSession = (): Promise<ApiResult<SessionPayload>> => call(`/api/
 export const planTrip = (): Promise<ApiResult<SessionPayload>> =>
   postJson(`/api/sessions/${SID}/plan`, {
     days: 2,
-    destination: "Tokyo",
-    accommodation: { name: "Shinjuku Hotel", lat: 35.6938, lng: 139.7034 },
-    mustVisit: [{ name: "teamLab Planets" }],
+    destination: "Taipei",
+    accommodation: { name: "Taipei Main Station Hotel", lat: 25.0478, lng: 121.517 },
+    mustVisit: [{ name: "Taipei 101" }],
     pace: "relaxed",
   });
 

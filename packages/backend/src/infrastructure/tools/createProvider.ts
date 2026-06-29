@@ -8,7 +8,7 @@ import type { ToolProvider } from "../../application/ports/ToolProvider";
 import { createGoogleToolProvider } from "./google/googleToolProvider";
 import { createMockToolProvider } from "./mock/mockToolProvider";
 import { withCache } from "./cache";
-import { TOKYO_PLACES } from "./mock/fixtures";
+import { TAIPEI_PLACES } from "./mock/fixtures";
 
 export interface SelectedProvider {
   provider: ToolProvider;
@@ -18,5 +18,5 @@ export interface SelectedProvider {
 export function createProvider(): SelectedProvider {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
   if (apiKey) return { provider: withCache(createGoogleToolProvider({ apiKey })), source: "google" };
-  return { provider: createMockToolProvider(TOKYO_PLACES), source: "mock" };
+  return { provider: createMockToolProvider(TAIPEI_PLACES), source: "mock" };
 }

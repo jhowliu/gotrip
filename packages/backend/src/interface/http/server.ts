@@ -26,7 +26,7 @@ import { createFileSessionStore } from "../../infrastructure/persistence/fileSes
 import { createProvider } from "../../infrastructure/tools/createProvider";
 import { createScriptedColdStartModel } from "../../infrastructure/llm/scriptedModelClient";
 import { createOpenAIModelClient } from "../../infrastructure/llm/openaiModelClient";
-import { TOKYO_ACCOMMODATION } from "../../infrastructure/tools/mock/fixtures";
+import { TAIPEI_ACCOMMODATION } from "../../infrastructure/tools/mock/fixtures";
 
 const legMinutes = (a: GeoLocation, b: GeoLocation): number => estimateTravelMinutes(a, b, "transit");
 const store = createFileSessionStore("data/sessions");
@@ -53,7 +53,7 @@ app.get("/", (c) => c.json({ app: "gotrip api", ui: "run the web app: npm run we
 app.get("/api/config", (c) => c.json({ chatEnabled: hasOpenAI(), provider: providerSource }));
 
 app.get("/api/places", async (c) => {
-  const places = await provider.searchPlaces({ query: c.req.query("q") ?? "", center: TOKYO_ACCOMMODATION });
+  const places = await provider.searchPlaces({ query: c.req.query("q") ?? "", center: TAIPEI_ACCOMMODATION });
   return c.json({ places });
 });
 

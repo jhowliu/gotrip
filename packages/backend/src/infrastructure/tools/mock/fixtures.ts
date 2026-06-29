@@ -76,6 +76,78 @@ export const TOKYO_PLACES: PlaceDetail[] = [
   },
 ];
 
+// --- Taipei demo fixture: backs the web/CLI in mock mode (no Google key) ---
+// The Tokyo set above stays the test regression suite; this is the demo data.
+
+export const TAIPEI_ACCOMMODATION: Location = {
+  name: "Taipei Main Station Hotel",
+  lat: 25.0478,
+  lng: 121.517,
+};
+
+export const TAIPEI_PLACES: PlaceDetail[] = [
+  {
+    placeId: "p_taipei101",
+    name: "Taipei 101",
+    category: "landmark",
+    location: { name: "Taipei 101", lat: 25.0339, lng: 121.5645 },
+    rating: 4.5,
+    priceLevel: 2,
+    estimatedVisitMinutes: 90,
+    ticketPrice: 600,
+  },
+  {
+    placeId: "p_palace",
+    name: "National Palace Museum",
+    category: "museum",
+    location: { name: "National Palace Museum", lat: 25.1024, lng: 121.5485 },
+    rating: 4.6,
+    priceLevel: 1,
+    estimatedVisitMinutes: 120,
+    ticketPrice: 350,
+  },
+  {
+    placeId: "p_cks",
+    name: "Chiang Kai-shek Memorial Hall",
+    category: "landmark",
+    location: { name: "Chiang Kai-shek Memorial Hall", lat: 25.0347, lng: 121.5219 },
+    rating: 4.6,
+    priceLevel: 0,
+    estimatedVisitMinutes: 60,
+    ticketPrice: 0,
+  },
+  {
+    placeId: "p_longshan",
+    name: "Longshan Temple",
+    category: "temple",
+    location: { name: "Longshan Temple", lat: 25.037, lng: 121.4998 },
+    rating: 4.5,
+    priceLevel: 0,
+    estimatedVisitMinutes: 45,
+    ticketPrice: 0,
+  },
+  {
+    placeId: "p_shilin",
+    name: "Shilin Night Market",
+    category: "market",
+    location: { name: "Shilin Night Market", lat: 25.0877, lng: 121.524 },
+    rating: 4.3,
+    priceLevel: 1,
+    estimatedVisitMinutes: 90,
+    ticketPrice: 0,
+  },
+  {
+    placeId: "p_daan",
+    name: "Da'an Forest Park",
+    category: "park",
+    location: { name: "Da'an Forest Park", lat: 25.0295, lng: 121.536 },
+    rating: 4.5,
+    priceLevel: 0,
+    estimatedVisitMinutes: 60,
+    ticketPrice: 0,
+  },
+];
+
 // --- Adversarial fixture: a must-visit with a narrow morning window ---
 // A naive (geometry-only) schedule visits it late → CLOSED_HOURS; the agent must
 // re-plan with respectWindows so it lands inside 09:00–10:30.
