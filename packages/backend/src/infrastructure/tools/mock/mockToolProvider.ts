@@ -38,9 +38,16 @@ export function createMockToolProvider(places: PlaceDetail[]): ToolProvider {
         list = places.filter((p) => !RESTAURANT_CATEGORIES.has(p.category));
       }
 
+      // Name match: when the query names a specific place (e.g. must-visit
+      // resolution "teamLab Planets Tokyo"), narrow to it; generic queries pass.
+      const q = input.query.toLowerCase();
+      const named = list.filter((p) => q.includes(p.name.toLowerCase()));
+      if (named.length > 0) list = named;
+
       const { lat, lng } = input.center;
       if (typeof lat === "number" && typeof lng === "number") {
         const center = { lat, lng };
+        if (input.radius) list = list.filter((p) => haversineMeters(center, p.location) <= input.radius!);
         list = [...list].sort(
           (a, b) => haversineMeters(center, a.location) - haversineMeters(center, b.location),
         );
