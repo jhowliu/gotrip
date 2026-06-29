@@ -1,0 +1,29 @@
+{
+  "name": "@gotrip/backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "gotrip backend — domain, agent runtime, and the Hono API (Clean Architecture, inner layers).",
+  "scripts": {
+    "cli": "tsx src/interface/cli.ts",
+    "cli:env": "tsx --env-file=../../.env src/interface/cli.ts",
+    "serve": "tsx src/interface/http/server.ts",
+    "serve:env": "tsx --env-file=../../.env src/interface/http/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.6",
+    "hono": "^4.12.27",
+    "openai": "^4.0.0",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.9"
+  }
+}
