@@ -15,6 +15,7 @@ import type {
   TravelMode,
   TravelTime,
 } from "../../../domain/itinerary";
+import { estimateAdmission } from "../../../domain/pricing";
 
 // ---- Places API (New) v1 shapes (only the fields we request) ----
 
@@ -100,11 +101,13 @@ export function openingHoursToWindow(hours?: { periods?: GooglePeriod[] }): [str
 
 export function mapPlaceDetail(place: GooglePlace): PlaceDetail {
   const name = place.displayName?.text ?? place.id;
+  const category = googleTypesToCategory(place.types);
   const detail: PlaceDetail = {
     placeId: place.id,
     name,
-    category: googleTypesToCategory(place.types),
+    category,
     location: { name, lat: place.location?.latitude ?? 0, lng: place.location?.longitude ?? 0 },
+    ticketPrice: estimateAdmission(category, name), // Google gives no admission price
   };
   const window = openingHoursToWindow(place.regularOpeningHours);
   if (window) detail.openWindow = window;
