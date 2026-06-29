@@ -57,6 +57,23 @@ app.get("/api/places", async (c) => {
   return c.json({ places });
 });
 
+app.get("/api/route", async (c) => {
+  const from = c.req.query("from");
+  const to = c.req.query("to");
+  if (!from || !to) return c.json({ error: "from and to place ids required" }, 400);
+  const detail = async (id: string) => {
+    try {
+      return await provider.getPlaceDetails({ placeId: id });
+    } catch {
+      return null;
+    }
+  };
+  const [a, b] = await Promise.all([detail(from), detail(to)]);
+  if (!a || !b) return c.json({ error: "unknown place id" }, 404);
+  const route = await provider.getTransitRoute({ origin: a.location, destination: b.location, mode: "transit" });
+  return c.json({ route }); // TransitRoute | null (null in mock / uncovered regions)
+});
+
 app.get("/api/sessions/:id", async (c) => {
   const itinerary = await store.load(c.req.param("id"));
   if (!itinerary) return c.json({ error: "not found" }, 404);

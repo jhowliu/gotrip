@@ -6,7 +6,7 @@
  * without network. Keys live in env (GOOGLE_MAPS_API_KEY), never in code.
  */
 
-import type { GeoLocation, Place, PlaceDetail, TravelMode, TravelTime } from "../../../domain/itinerary";
+import type { GeoLocation, Place, PlaceDetail, TransitRoute, TravelMode, TravelTime } from "../../../domain/itinerary";
 import type { GetTravelTimeInput, SearchPlacesInput, ToolProvider } from "../../../application/ports/ToolProvider";
 import { haversineMeters } from "../../../domain/clusterByDay";
 import { estimateTravelMinutes } from "../../../domain/travel";
@@ -15,10 +15,12 @@ import {
   mapPlaceDetail,
   mapRoute,
   mapTextSearch,
+  mapTransitRoute,
   type GoogleGeocodeResponse,
   type GooglePlace,
   type GoogleRoutesResponse,
   type GoogleTextSearchResponse,
+  type GoogleTransitResponse,
 } from "./googleMappers";
 
 const PLACES_BASE = "https://places.googleapis.com/v1";
@@ -111,6 +113,25 @@ export function createGoogleToolProvider(opts: GoogleProviderOptions): ToolProvi
       const url = `${GEOCODE_URL}?address=${encodeURIComponent(input.query)}&key=${encodeURIComponent(key)}`;
       const data = await requestJson<GoogleGeocodeResponse>(url, {});
       return mapGeocode(data, input.query);
+    },
+
+    async getTransitRoute(input: GetTravelTimeInput): Promise<TransitRoute | null> {
+      const data = await requestJson<GoogleTransitResponse>(ROUTES_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": key,
+          "X-Goog-FieldMask":
+            "routes.duration,routes.distanceMeters,routes.legs.steps.travelMode,routes.legs.steps.staticDuration,routes.legs.steps.transitDetails",
+        },
+        body: JSON.stringify({
+          origin: { location: { latLng: latLng(input.origin) } },
+          destination: { location: { latLng: latLng(input.destination) } },
+          travelMode: "TRANSIT",
+          departureTime: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      });
+      return mapTransitRoute(data);
     },
   };
 }

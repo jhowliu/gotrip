@@ -5,13 +5,14 @@
  * left uncached. Lives at the port boundary; the inner layers are unaware.
  */
 
-import type { GeoLocation, Place, PlaceDetail } from "../../domain/itinerary";
-import type { SearchPlacesInput, ToolProvider } from "../../application/ports/ToolProvider";
+import type { GeoLocation, Place, PlaceDetail, TransitRoute } from "../../domain/itinerary";
+import type { GetTravelTimeInput, SearchPlacesInput, ToolProvider } from "../../application/ports/ToolProvider";
 
 export function withCache(provider: ToolProvider): ToolProvider {
   const details = new Map<string, Promise<PlaceDetail>>();
   const geo = new Map<string, Promise<GeoLocation | null>>();
   const search = new Map<string, Promise<Place[]>>();
+  const transit = new Map<string, Promise<TransitRoute | null>>();
 
   const memo = <T>(cache: Map<string, Promise<T>>, key: string, run: () => Promise<T>): Promise<T> => {
     let hit = cache.get(key);
@@ -30,5 +31,7 @@ export function withCache(provider: ToolProvider): ToolProvider {
         provider.searchPlaces(input),
       ),
     getTravelTime: (input) => provider.getTravelTime(input),
+    getTransitRoute: (input: GetTravelTimeInput) =>
+      memo(transit, JSON.stringify([input.origin, input.destination]), () => provider.getTransitRoute(input)),
   };
 }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Day, EditOp, Item, Validation } from "./api";
+import { getRoute, type Day, type EditOp, type Item, type TransitRoute, type Validation } from "./api";
 
 const yen = (n: number): string => "¥" + n.toLocaleString();
 
@@ -53,17 +53,52 @@ export function Banner({ validation }: { validation: Validation | null }): JSX.E
   );
 }
 
+function TransitRow({ item, from, to }: { item: Item; from?: string; to?: string }): JSX.Element {
+  const [route, setRoute] = useState<TransitRoute | null | undefined>(undefined);
+  const [loading, setLoading] = useState(false);
+
+  const load = async (): Promise<void> => {
+    if (!from || !to) return;
+    setLoading(true);
+    const r = await getRoute(from, to);
+    setLoading(false);
+    setRoute(r.data.route ?? null);
+  };
+
+  return (
+    <div className="py-[3px] pr-1 pl-2 text-xs text-mut">
+      <span>↓ {item.durationMinutes} min transit</span>
+      {from && to ? (
+        <button
+          className="ml-2 rounded border border-line px-1.5 py-px text-[11px] hover:bg-paper"
+          onClick={load}
+          disabled={loading || route !== undefined}
+        >
+          {loading ? "…" : "route"}
+        </button>
+      ) : null}
+      {route !== undefined ? (
+        <div className="mt-0.5 text-[11px] text-accent">{route ? `🚇 ${route.summary} · ${route.durationMinutes} min` : "no transit detail (mock / region not covered)"}</div>
+      ) : null}
+    </div>
+  );
+}
+
 export function ItemCard({
   item,
   dayIndex,
   onOp,
+  from,
+  to,
 }: {
   item: Item;
   dayIndex: number;
   onOp: (ops: EditOp[]) => void;
+  from?: string;
+  to?: string;
 }): JSX.Element {
   if (item.kind === "transit") {
-    return <div className="py-[3px] pr-1 pl-2 text-xs text-mut">↓ {item.durationMinutes} min transit</div>;
+    return <TransitRow item={item} from={from} to={to} />;
   }
   if (item.kind === "meal") {
     return (
@@ -138,9 +173,11 @@ export function DayColumn({ day, onOp }: { day: Day; onOp: (ops: EditOp[]) => vo
       <div className="mb-2 text-sm font-semibold">
         Day {day.dayIndex} · {visits} visits
       </div>
-      {day.items.map((item) => (
-        <ItemCard key={item.itemId} item={item} dayIndex={day.dayIndex} onOp={onOp} />
-      ))}
+      {day.items.map((item, idx) => {
+        const from = item.kind === "transit" ? [...day.items.slice(0, idx)].reverse().find((i) => i.kind === "visit")?.placeId : undefined;
+        const to = item.kind === "transit" ? day.items.slice(idx + 1).find((i) => i.kind === "visit")?.placeId : undefined;
+        return <ItemCard key={item.itemId} item={item} dayIndex={day.dayIndex} onOp={onOp} from={from} to={to} />;
+      })}
     </div>
   );
 }

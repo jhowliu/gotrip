@@ -45,6 +45,23 @@ export type EditOp =
   | { op: "setDuration"; itemId: string; minutes: number }
   | { op: "pin"; itemId: string };
 
+export interface TransitStep {
+  mode: "walk" | "transit";
+  durationMinutes?: number;
+  line?: string;
+  vehicle?: string;
+  from?: string;
+  to?: string;
+  stops?: number;
+}
+
+export interface TransitRoute {
+  legs: TransitStep[];
+  summary: string;
+  durationMinutes: number;
+  distanceMeters: number;
+}
+
 export interface ApiResult<T> {
   ok: boolean;
   status: number;
@@ -91,3 +108,6 @@ export const applyOps = (operations: EditOp[]): Promise<ApiResult<SessionPayload
 
 export const sendChat = (instruction: string): Promise<ApiResult<SessionPayload>> =>
   postJson(`/api/sessions/${SID}/chat`, { instruction });
+
+export const getRoute = (from: string, to: string): Promise<ApiResult<{ route: TransitRoute | null }>> =>
+  call(`/api/route?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);

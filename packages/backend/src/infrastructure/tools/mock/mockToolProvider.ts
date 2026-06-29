@@ -79,5 +79,9 @@ export function createMockToolProvider(places: PlaceDetail[]): ToolProvider {
       );
       return match ? match.location : null;
     },
+
+    async getTransitRoute() {
+      return null; // no transit-line data in the mock
+    },
   };
 }

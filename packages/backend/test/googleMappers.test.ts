@@ -6,6 +6,7 @@ import {
   mapPriceLevel,
   mapRoute,
   mapTextSearch,
+  mapTransitRoute,
   openingHoursToWindow,
   type GooglePlace,
 } from "../src/infrastructure/tools/google/googleMappers";
@@ -86,5 +87,43 @@ describe("googleMappers", () => {
       mode: "transit",
     });
     expect(mapRoute({}, "walking")).toEqual({ durationMinutes: 0, distanceMeters: 0, mode: "walking" });
+  });
+
+  it("maps a transit route into legs + a readable summary", () => {
+    const resp = {
+      routes: [
+        {
+          duration: "1500s",
+          distanceMeters: 8200,
+          legs: [
+            {
+              steps: [
+                { travelMode: "WALK", staticDuration: "240s" },
+                {
+                  travelMode: "TRANSIT",
+                  transitDetails: {
+                    stopDetails: { departureStop: { name: "Ximen" }, arrivalStop: { name: "Taipei City Hall" } },
+                    transitLine: { name: "Bannan Line", nameShort: "BL", vehicle: { type: "SUBWAY" } },
+                    stopCount: 4,
+                  },
+                },
+                { travelMode: "WALK", staticDuration: "120s" },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const route = mapTransitRoute(resp);
+    expect(route).not.toBeNull();
+    expect(route!.durationMinutes).toBe(25);
+    expect(route!.summary).toBe("BL Ximen→Taipei City Hall (4 stops)");
+    expect(route!.legs.filter((l) => l.mode === "transit")).toHaveLength(1);
+    expect(route!.legs[0]).toMatchObject({ mode: "walk", durationMinutes: 4 });
+  });
+
+  it("returns null when there is no transit route", () => {
+    expect(mapTransitRoute({})).toBeNull();
+    expect(mapTransitRoute({ routes: [{ legs: [] }] })).toBeNull();
   });
 });

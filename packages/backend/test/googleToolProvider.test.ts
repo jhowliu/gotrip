@@ -112,6 +112,31 @@ describe("GoogleToolProvider (offline)", () => {
     expect(tt.mode).toBe("transit");
   });
 
+  it("getTransitRoute requests the transit-detail mask and maps a summary", async () => {
+    const calls: Call[] = [];
+    const provider = createGoogleToolProvider({
+      apiKey: "KEY",
+      fetchImpl: fakeFetch(
+        () => ({
+          body: {
+            routes: [
+              {
+                duration: "900s",
+                distanceMeters: 5000,
+                legs: [{ steps: [{ travelMode: "TRANSIT", transitDetails: { stopDetails: { departureStop: { name: "A" }, arrivalStop: { name: "B" } }, transitLine: { nameShort: "BR" }, stopCount: 2 } }] }],
+              },
+            ],
+          },
+        }),
+        calls,
+      ),
+    });
+
+    const route = await provider.getTransitRoute({ origin: { name: "A", lat: 25.05, lng: 121.5 }, destination: { name: "B", lat: 25.03, lng: 121.56 }, mode: "transit" });
+    expect(route?.summary).toBe("BR A→B (2 stops)");
+    expect(header(calls[0]!.init, "X-Goog-FieldMask")).toContain("transitDetails");
+  });
+
   it("throws a readable error on a non-OK response", async () => {
     const provider = createGoogleToolProvider({ apiKey: "BAD", fetchImpl: fakeFetch(() => ({ status: 403, body: { error: { message: "key invalid" } } }), []) });
     await expect(provider.getPlaceDetails({ placeId: "x" })).rejects.toThrow(/google 403/);

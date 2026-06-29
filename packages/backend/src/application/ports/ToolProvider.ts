@@ -4,7 +4,7 @@
  * M0–M3 (mock) and M4 (Google). This is what makes "mock-first" work.
  */
 
-import type { GeoLocation, Location, Place, PlaceDetail, PlaceType, TravelMode, TravelTime } from "../../domain/itinerary";
+import type { GeoLocation, Location, Place, PlaceDetail, PlaceType, TransitRoute, TravelMode, TravelTime } from "../../domain/itinerary";
 
 export interface SearchPlacesInput {
   query: string;
@@ -26,4 +26,7 @@ export interface ToolProvider {
   getTravelTime(input: GetTravelTimeInput): Promise<TravelTime>;
   /** Resolve a free-text place/address to coordinates. Null when nothing matches. */
   geocode(input: { query: string }): Promise<GeoLocation | null>;
+  /** Door-to-door transit route with line/transfer detail. Null when unavailable
+   *  (mock, or a region without transit coverage). */
+  getTransitRoute(input: GetTravelTimeInput): Promise<TransitRoute | null>;
 }

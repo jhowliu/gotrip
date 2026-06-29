@@ -5,7 +5,16 @@
  * here. Targets Places API (New) v1 + classic Geocoding + Routes API.
  */
 
-import type { GeoLocation, Place, PlaceDetail, PriceLevel, TravelMode, TravelTime } from "../../../domain/itinerary";
+import type {
+  GeoLocation,
+  Place,
+  PlaceDetail,
+  PriceLevel,
+  TransitRoute,
+  TransitStep,
+  TravelMode,
+  TravelTime,
+} from "../../../domain/itinerary";
 
 // ---- Places API (New) v1 shapes (only the fields we request) ----
 
@@ -138,6 +147,66 @@ export function mapGeocode(resp: GoogleGeocodeResponse, name: string): GeoLocati
 }
 
 // ---- Routes API (computeRoutes) ----
+
+export interface GoogleTransitStep {
+  travelMode?: string;
+  staticDuration?: string;
+  duration?: string;
+  distanceMeters?: number;
+  transitDetails?: {
+    stopDetails?: { departureStop?: { name?: string }; arrivalStop?: { name?: string } };
+    transitLine?: { name?: string; nameShort?: string; vehicle?: { type?: string } };
+    stopCount?: number;
+  };
+}
+export interface GoogleTransitResponse {
+  routes?: Array<{ duration?: string; distanceMeters?: number; legs?: Array<{ steps?: GoogleTransitStep[] }> }>;
+}
+
+const toMinutes = (s?: string): number =>
+  s ? Math.round((Number.parseInt(String(s).replace("s", ""), 10) || 0) / 60) : 0;
+
+export function formatTransitSummary(legs: TransitStep[]): string {
+  const rides = legs.filter((l) => l.mode === "transit");
+  if (rides.length === 0) {
+    const walk = legs.reduce((sum, l) => sum + (l.durationMinutes ?? 0), 0);
+    return walk ? `walk ${walk} min` : "walk";
+  }
+  return rides
+    .map((l) => {
+      const line = l.line ?? l.vehicle ?? "transit";
+      const seg = l.from && l.to ? ` ${l.from}→${l.to}` : "";
+      const stops = typeof l.stops === "number" ? ` (${l.stops} stop${l.stops === 1 ? "" : "s"})` : "";
+      return `${line}${seg}${stops}`;
+    })
+    .join(" · transfer · ");
+}
+
+export function mapTransitRoute(resp: GoogleTransitResponse): TransitRoute | null {
+  const route = resp.routes?.[0];
+  if (!route) return null;
+  const legs: TransitStep[] = [];
+  for (const leg of route.legs ?? []) {
+    for (const step of leg.steps ?? []) {
+      const td = step.transitDetails;
+      if (step.travelMode === "TRANSIT" && td) {
+        legs.push({
+          mode: "transit",
+          ...(td.transitLine?.nameShort ?? td.transitLine?.name ? { line: td.transitLine?.nameShort ?? td.transitLine?.name } : {}),
+          ...(td.transitLine?.vehicle?.type ? { vehicle: td.transitLine.vehicle.type } : {}),
+          ...(td.stopDetails?.departureStop?.name ? { from: td.stopDetails.departureStop.name } : {}),
+          ...(td.stopDetails?.arrivalStop?.name ? { to: td.stopDetails.arrivalStop.name } : {}),
+          ...(typeof td.stopCount === "number" ? { stops: td.stopCount } : {}),
+        });
+      } else if (step.travelMode === "WALK") {
+        const m = toMinutes(step.staticDuration ?? step.duration);
+        legs.push({ mode: "walk", ...(m ? { durationMinutes: m } : {}) });
+      }
+    }
+  }
+  if (legs.length === 0) return null;
+  return { legs, summary: formatTransitSummary(legs), durationMinutes: toMinutes(route.duration), distanceMeters: route.distanceMeters ?? 0 };
+}
 
 export interface GoogleRoutesResponse {
   routes?: Array<{ distanceMeters?: number; duration?: string }>;

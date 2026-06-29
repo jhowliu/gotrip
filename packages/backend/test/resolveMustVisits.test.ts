@@ -48,6 +48,7 @@ describe("resolveMustVisits", () => {
       },
       getTravelTime: async () => ({ durationMinutes: 0, distanceMeters: 0, mode: "transit" }),
       geocode: async () => null,
+      getTransitRoute: async () => null,
     };
 
     const r = await resolveMustVisits(request([{ name: "Made-up Place" }]), empty);
