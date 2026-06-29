@@ -82,7 +82,7 @@ export const planTrip = (): Promise<ApiResult<SessionPayload>> =>
     days: 2,
     destination: "Tokyo",
     accommodation: { name: "Shinjuku Hotel", lat: 35.6938, lng: 139.7034 },
-    mustVisit: [{ name: "teamLab Planets", placeId: "p_teamlab" }],
+    mustVisit: [{ name: "teamLab Planets" }],
     pace: "relaxed",
   });
 

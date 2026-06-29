@@ -252,7 +252,8 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
 const INSTRUCTION = [
   "You are a travel-planning agent. Plan a trip by calling tools in this order:",
   "(1) searchPlaces to find candidate attractions near the accommodation;",
-  "(2) getPlaceDetails for the places you'll use — including every must-visit (use its placeId);",
+  "(2) getPlaceDetails for the places you'll use — including every must-visit (use its placeId).",
+  "Some places (must-visits and nearby suggestions) may already be in your data — reuse those, don't re-search them;",
   "(3) clusterByDay to spread the detailed places across the requested number of days;",
   "(4) assembleItinerary to lay out a draft (visits, transit, meals) — it honours opening hours;",
   "(5) finalizeItinerary to validate and finish.",
@@ -262,9 +263,17 @@ const INSTRUCTION = [
   "These tools operate on the data you've already gathered. Stop once finalizeItinerary succeeds.",
 ].join(" ");
 
+export interface ColdStartSeed {
+  /** Pre-resolved place details (e.g. must-visits from resolveMustVisits). */
+  details?: Map<string, PlaceDetail>;
+  /** Pre-discovered candidate summaries (e.g. companions near a far must-visit). */
+  places?: Map<string, Place>;
+}
+
 export function createColdStartSpec(
   request: TripRequest,
   provider: ToolProvider,
+  seed?: ColdStartSeed,
 ): AgentSpec<PlanningState> {
   return {
     instruction: INSTRUCTION,
@@ -274,8 +283,8 @@ export function createColdStartSpec(
     tools: buildTools(provider),
     initialState: {
       request,
-      places: new Map(),
-      details: new Map(),
+      places: seed?.places ?? new Map(),
+      details: seed?.details ?? new Map(),
       assignments: null,
       draft: null,
       itinerary: null,
