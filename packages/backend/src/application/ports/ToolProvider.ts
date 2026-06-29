@@ -24,4 +24,6 @@ export interface ToolProvider {
   searchPlaces(input: SearchPlacesInput): Promise<Place[]>;
   getPlaceDetails(input: { placeId: string }): Promise<PlaceDetail>;
   getTravelTime(input: GetTravelTimeInput): Promise<TravelTime>;
+  /** Resolve a free-text place/address to coordinates. Null when nothing matches. */
+  geocode(input: { query: string }): Promise<GeoLocation | null>;
 }

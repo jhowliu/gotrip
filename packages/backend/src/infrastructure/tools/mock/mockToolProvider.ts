@@ -64,5 +64,13 @@ export function createMockToolProvider(places: PlaceDetail[]): ToolProvider {
         mode,
       };
     },
+
+    async geocode(input: { query: string }) {
+      const q = input.query.toLowerCase();
+      const match = places.find(
+        (p) => p.name.toLowerCase().includes(q) || q.includes(p.name.toLowerCase()),
+      );
+      return match ? match.location : null;
+    },
   };
 }
