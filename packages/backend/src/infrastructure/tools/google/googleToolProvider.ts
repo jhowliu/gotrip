@@ -8,6 +8,8 @@
 
 import type { GeoLocation, Place, PlaceDetail, TravelMode, TravelTime } from "../../../domain/itinerary";
 import type { GetTravelTimeInput, SearchPlacesInput, ToolProvider } from "../../../application/ports/ToolProvider";
+import { haversineMeters } from "../../../domain/clusterByDay";
+import { estimateTravelMinutes } from "../../../domain/travel";
 import {
   mapGeocode,
   mapPlaceDetail,
@@ -84,16 +86,25 @@ export function createGoogleToolProvider(opts: GoogleProviderOptions): ToolProvi
       };
       // TRANSIT needs a departure time or Google returns no route.
       if (mode === "transit") body.departureTime = new Date(Date.now() + 60_000).toISOString();
+      const fieldMask =
+        mode === "transit"
+          ? "routes.duration,routes.distanceMeters,routes.legs.steps.transitDetails"
+          : "routes.duration,routes.distanceMeters";
       const data = await requestJson<GoogleRoutesResponse>(ROUTES_URL, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Goog-Api-Key": key,
-          "X-Goog-FieldMask": "routes.duration,routes.distanceMeters",
-        },
+        headers: { "Content-Type": "application/json", "X-Goog-Api-Key": key, "X-Goog-FieldMask": fieldMask },
         body: JSON.stringify(body),
       });
-      return mapRoute(data, mode);
+      const route = mapRoute(data, mode);
+      if (route.durationMinutes > 0) return route;
+      // Google found no route — e.g. transit is unlicensed in some regions
+      // (notably Japan). Fall back to the geometric estimate so the tool always
+      // returns a sane number; scheduling uses this estimate anyway.
+      return {
+        durationMinutes: estimateTravelMinutes(input.origin, input.destination, mode),
+        distanceMeters: Math.round(haversineMeters(input.origin, input.destination)),
+        mode,
+      };
     },
 
     async geocode(input: { query: string }): Promise<GeoLocation | null> {

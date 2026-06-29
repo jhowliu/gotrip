@@ -100,6 +100,18 @@ describe("GoogleToolProvider (offline)", () => {
     expect(await none.geocode({ query: "nowhere" })).toBeNull();
   });
 
+  it("falls back to a geometric estimate when Google returns no route (empty {})", async () => {
+    const provider = createGoogleToolProvider({ apiKey: "KEY", fetchImpl: fakeFetch(() => ({ body: {} }), []) });
+    const tt = await provider.getTravelTime({
+      origin: { name: "Shinjuku", lat: 35.69, lng: 139.7 },
+      destination: { name: "Roppongi", lat: 35.665, lng: 139.726 },
+      mode: "transit",
+    });
+    expect(tt.durationMinutes).toBeGreaterThan(0);
+    expect(tt.distanceMeters).toBeGreaterThan(0);
+    expect(tt.mode).toBe("transit");
+  });
+
   it("throws a readable error on a non-OK response", async () => {
     const provider = createGoogleToolProvider({ apiKey: "BAD", fetchImpl: fakeFetch(() => ({ status: 403, body: { error: { message: "key invalid" } } }), []) });
     await expect(provider.getPlaceDetails({ placeId: "x" })).rejects.toThrow(/google 403/);

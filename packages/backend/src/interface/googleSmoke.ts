@@ -32,7 +32,7 @@ async function main(): Promise<void> {
 
     console.log(`\ntravel Shinjuku → ${first.name} (transit) …`);
     const tt = await g.getTravelTime({ origin: center, destination: d.location, mode: "transit" });
-    console.log("  →", tt);
+    console.log("  →", tt, "(geometric fallback in Japan — transit API is unlicensed there)");
   }
   console.log("\nok");
 }
