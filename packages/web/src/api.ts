@@ -87,21 +87,25 @@ export interface SessionPayload {
   finalized?: boolean;
   changed?: boolean;
   errors?: string[];
+  resolveErrors?: string[];
   error?: string;
+}
+
+export interface PlanRequest {
+  destination: string;
+  days: number;
+  accommodation: { name: string; lat?: number; lng?: number };
+  mustVisit?: { name: string }[];
+  budget?: { min?: number; max: number };
+  pace?: "relaxed" | "packed";
 }
 
 export const getConfig = (): Promise<ApiResult<{ chatEnabled: boolean; provider?: string }>> => call("/api/config");
 
 export const loadSession = (): Promise<ApiResult<SessionPayload>> => call(`/api/sessions/${SID}`);
 
-export const planTrip = (): Promise<ApiResult<SessionPayload>> =>
-  postJson(`/api/sessions/${SID}/plan`, {
-    days: 2,
-    destination: "Taipei",
-    accommodation: { name: "Taipei Main Station Hotel", lat: 25.0478, lng: 121.517 },
-    mustVisit: [{ name: "Taipei 101" }],
-    pace: "relaxed",
-  });
+export const planTrip = (request: PlanRequest): Promise<ApiResult<SessionPayload>> =>
+  postJson(`/api/sessions/${SID}/plan`, request);
 
 export const applyOps = (operations: EditOp[]): Promise<ApiResult<SessionPayload>> =>
   postJson(`/api/sessions/${SID}/ops`, { operations });

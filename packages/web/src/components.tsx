@@ -44,6 +44,71 @@ export function Header(props: {
   );
 }
 
+export interface TripFormState {
+  destination: string;
+  days: number;
+  accommodation: string;
+  mustVisit: string; // comma-separated names
+  budgetMax: string;
+  pace: "relaxed" | "packed";
+}
+
+export function TripForm({
+  value,
+  onChange,
+  onSubmit,
+  busy,
+}: {
+  value: TripFormState;
+  onChange: (v: TripFormState) => void;
+  onSubmit: () => void;
+  busy: boolean;
+}): JSX.Element {
+  const set = <K extends keyof TripFormState>(k: K, v: TripFormState[K]): void => onChange({ ...value, [k]: v });
+  const field = "rounded-lg border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent";
+  const label = "flex flex-col gap-1 text-xs text-mut";
+  return (
+    <form
+      className="mb-4 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] items-end gap-3 rounded-xl border border-line bg-white p-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit();
+      }}
+    >
+      <label className={label}>
+        destination
+        <input className={field} value={value.destination} onChange={(e) => set("destination", e.target.value)} placeholder="Taipei" />
+      </label>
+      <label className={label}>
+        days
+        <input type="number" min={1} max={14} className={field} value={value.days} onChange={(e) => set("days", Number(e.target.value))} />
+      </label>
+      <label className={label}>
+        accommodation
+        <input className={field} value={value.accommodation} onChange={(e) => set("accommodation", e.target.value)} placeholder="Taipei Main Station" />
+      </label>
+      <label className={label}>
+        must-visit (comma-separated)
+        <input className={field} value={value.mustVisit} onChange={(e) => set("mustVisit", e.target.value)} placeholder="Taipei 101, Longshan Temple" />
+      </label>
+      <label className={label}>
+        budget / day (max)
+        <input type="number" min={0} className={field} value={value.budgetMax} onChange={(e) => set("budgetMax", e.target.value)} placeholder="optional" />
+      </label>
+      <label className={label}>
+        pace
+        <select className={field} value={value.pace} onChange={(e) => set("pace", e.target.value as "relaxed" | "packed")}>
+          <option value="relaxed">relaxed</option>
+          <option value="packed">packed</option>
+        </select>
+      </label>
+      <button type="submit" className="btn" disabled={busy}>
+        {busy ? "planning…" : "Plan trip"}
+      </button>
+    </form>
+  );
+}
+
 export function Banner({ validation }: { validation: Validation | null }): JSX.Element | null {
   if (!validation) return null;
   const { hardViolations, softWarnings } = validation;
