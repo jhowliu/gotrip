@@ -9,6 +9,7 @@
     "cli:env": "tsx --env-file=../../.env src/interface/cli.ts",
     "serve": "tsx src/interface/http/server.ts",
     "serve:env": "tsx --env-file=../../.env src/interface/http/server.ts",
+    "smoke:google": "tsx --env-file=../../.env src/interface/googleSmoke.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
