@@ -152,8 +152,14 @@ export async function resolveItineraryDetails(
   }
   const details = new Map<string, PlaceDetail>();
   for (const id of ids) {
-    const detail = await provider.getPlaceDetails({ placeId: id });
-    details.set(detail.placeId, detail);
+    try {
+      const detail = await provider.getPlaceDetails({ placeId: id });
+      details.set(detail.placeId, detail);
+    } catch {
+      // Unknown/foreign id (e.g. a session saved under a different provider) —
+      // skip it. Days that need this place can't be re-laid-out, but load and
+      // untouched-day edits still work instead of failing the whole request.
+    }
   }
   return details;
 }
