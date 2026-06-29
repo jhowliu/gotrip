@@ -6,9 +6,9 @@
   "description": "gotrip backend — domain, agent runtime, and the Hono API (Clean Architecture, inner layers).",
   "scripts": {
     "cli": "tsx src/interface/cli.ts",
-    "cli:env": "tsx --env-file=.env src/interface/cli.ts",
+    "cli:env": "tsx --env-file=../../.env src/interface/cli.ts",
     "serve": "tsx src/interface/http/server.ts",
-    "serve:env": "tsx --env-file=.env src/interface/http/server.ts",
+    "serve:env": "tsx --env-file=../../.env src/interface/http/server.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
