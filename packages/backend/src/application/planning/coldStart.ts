@@ -33,6 +33,8 @@ import { estimateTravelMinutes } from "../../domain/travel";
 export interface PlanningState {
   request: TripRequest;
   places: Map<string, Place>;
+  /** Model-facing handle → real placeId. The agent never sees raw place ids. */
+  refs: Map<string, string>;
   details: Map<string, PlaceDetail>;
   assignments: DayAssignment[] | null;
   draft: Itinerary | null;
@@ -68,10 +70,10 @@ const searchSchema = z.object({
   type: z.enum(["attraction", "restaurant"]).optional(),
   maxResults: z.number().int().positive().optional(),
 });
-const detailsSchema = z.object({ placeId: z.string() });
+const detailsSchema = z.object({ ref: z.string() });
 const travelSchema = z.object({
-  fromPlaceId: z.string(),
-  toPlaceId: z.string(),
+  fromRef: z.string(),
+  toRef: z.string(),
   mode: z.enum(["transit", "walking", "driving"]).optional(),
 });
 const costSchema = z.object({
@@ -84,7 +86,7 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
   return [
     {
       name: "searchPlaces",
-      description: "Search for candidate places near the accommodation. Returns lightweight summaries.",
+      description: "Search for candidate places near the accommodation. Each result has a short `ref` — pass it to getPlaceDetails.",
       inputSchema: searchSchema,
       async execute(input, state): Promise<ToolOutcome> {
         const { query, type, maxResults } = input as { query: string; type?: PlaceType; maxResults?: number };
@@ -94,35 +96,53 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
           ...(type ? { type } : {}),
           ...(maxResults ? { maxResults } : {}),
         });
-        for (const p of results) state.places.set(p.placeId, p);
-        return { content: results };
+        const summaries = results.map((p) => {
+          const ref = `r${state.refs.size + 1}`;
+          state.refs.set(ref, p.placeId);
+          state.places.set(p.placeId, p);
+          return {
+            ref,
+            name: p.name,
+            category: p.category,
+            ...(typeof p.rating === "number" ? { rating: p.rating } : {}),
+            ...(typeof p.priceLevel === "number" ? { priceLevel: p.priceLevel } : {}),
+            ...(p.shortAddress ? { shortAddress: p.shortAddress } : {}),
+          };
+        });
+        return { content: summaries };
       },
     },
     {
       name: "getPlaceDetails",
-      description: "Fetch full details (coords, opening window, visit minutes, ticket price) for a place.",
+      description: "Fetch full details (coords, opening window, visit minutes, ticket price) for a place by its `ref` from searchPlaces.",
       inputSchema: detailsSchema,
       async execute(input, state): Promise<ToolOutcome> {
-        const { placeId } = input as { placeId: string };
+        const { ref } = input as { ref: string };
+        const placeId = state.refs.get(ref) ?? ref; // refs map to ids; tolerate a real id too
         const detail = await provider.getPlaceDetails({ placeId });
         state.details.set(detail.placeId, detail);
-        return { content: detail };
+        return {
+          content: {
+            ref,
+            name: detail.name,
+            category: detail.category,
+            ...(detail.openWindow ? { openWindow: detail.openWindow } : {}),
+            ...(typeof detail.ticketPrice === "number" ? { ticketPrice: detail.ticketPrice } : {}),
+            ...(typeof detail.rating === "number" ? { rating: detail.rating } : {}),
+          },
+        };
       },
     },
     {
       name: "getTravelTime",
-      description: "Travel time between two already-detailed places.",
+      description: "Travel time between two places you've detailed, given their refs.",
       inputSchema: travelSchema,
       async execute(input, state): Promise<ToolOutcome> {
-        const { fromPlaceId, toPlaceId, mode } = input as {
-          fromPlaceId: string;
-          toPlaceId: string;
-          mode?: TravelMode;
-        };
-        const from = state.details.get(fromPlaceId);
-        const to = state.details.get(toPlaceId);
+        const { fromRef, toRef, mode } = input as { fromRef: string; toRef: string; mode?: TravelMode };
+        const from = state.details.get(state.refs.get(fromRef) ?? fromRef);
+        const to = state.details.get(state.refs.get(toRef) ?? toRef);
         if (!from || !to) {
-          return { content: { error: "unknown place id; fetch details first" }, isError: true };
+          return { content: { error: "unknown ref; getPlaceDetails first" }, isError: true };
         }
         const travel = await provider.getTravelTime({
           origin: from.location,
@@ -251,9 +271,9 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
 
 const INSTRUCTION = [
   "You are a travel-planning agent. Plan a trip by calling tools in this order:",
-  "(1) searchPlaces to find candidate attractions near the accommodation;",
-  "(2) getPlaceDetails for the places you'll use — including every must-visit (use its placeId).",
-  "Some places (must-visits and nearby suggestions) may already be in your data — reuse those, don't re-search them;",
+  "(1) searchPlaces to find candidate attractions near the accommodation — each result has a short `ref`;",
+  "(2) getPlaceDetails(ref) for the places you'll use, passing a `ref` from searchPlaces.",
+  "Must-visits and nearby suggestions are already loaded in your data — do NOT search for or fetch them;",
   "(3) clusterByDay to spread the detailed places across the requested number of days;",
   "(4) assembleItinerary to lay out a draft (visits, transit, meals) — it honours opening hours;",
   "(5) finalizeItinerary to validate and finish.",
@@ -275,15 +295,19 @@ export function createColdStartSpec(
   provider: ToolProvider,
   seed?: ColdStartSeed,
 ): AgentSpec<PlanningState> {
+  // Don't show raw place ids in the prompt — must-visits appear by name only
+  // (they're pre-loaded into details), so the model never handles an opaque id.
+  const display = { ...request, mustVisit: (request.mustVisit ?? []).map((m) => ({ name: m.name })) };
   return {
     instruction: INSTRUCTION,
-    kickoff: `Plan this trip:\n${JSON.stringify(request, null, 2)}`,
+    kickoff: `Plan this trip:\n${JSON.stringify(display, null, 2)}`,
     model: "gpt-4o-mini",
     constraints: { maxIterations: 25, maxTokens: 150_000, runtimeMs: 60_000 },
     tools: buildTools(provider),
     initialState: {
       request,
       places: seed?.places ?? new Map(),
+      refs: new Map(),
       details: seed?.details ?? new Map(),
       assignments: null,
       draft: null,
