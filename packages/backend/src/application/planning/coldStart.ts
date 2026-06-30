@@ -89,7 +89,7 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
       async execute(input, state): Promise<ToolOutcome> {
         const { query, type, maxResults } = input as { query: string; type?: PlaceType; maxResults?: number };
         const results = await provider.searchPlaces({
-          query,
+          query: `${query} in ${state.request.destination}`, // keep results in-region
           center: state.request.accommodation,
           ...(type ? { type } : {}),
           ...(maxResults ? { maxResults } : {}),

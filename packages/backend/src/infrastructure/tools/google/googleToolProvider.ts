@@ -61,8 +61,10 @@ export function createGoogleToolProvider(opts: GoogleProviderOptions): ToolProvi
       const body: Record<string, unknown> = { textQuery: input.query, maxResultCount: input.maxResults ?? 10 };
       if (input.type === "restaurant") body.includedType = "restaurant";
       const { lat, lng } = input.center;
-      if (typeof lat === "number" && typeof lng === "number" && input.radius) {
-        body.locationBias = { circle: { center: { latitude: lat, longitude: lng }, radius: input.radius } };
+      if (typeof lat === "number" && typeof lng === "number") {
+        // Always bias to the accommodation so a generic query stays in-region
+        // (otherwise Google text search is global). radius defaults to ~20km.
+        body.locationBias = { circle: { center: { latitude: lat, longitude: lng }, radius: input.radius ?? 20000 } };
       }
       const data = await requestJson<GoogleTextSearchResponse>(`${PLACES_BASE}/places:searchText`, {
         method: "POST",

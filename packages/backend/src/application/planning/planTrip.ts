@@ -7,9 +7,18 @@
 
 import type { AgentSpec } from "../agent/AgentSpec";
 import type { ToolProvider } from "../ports/ToolProvider";
-import type { Place, TripRequest } from "../../domain/itinerary";
+import type { Location, Place, TripRequest } from "../../domain/itinerary";
 import { createColdStartSpec, type PlanningState } from "./coldStart";
 import { resolveMustVisits } from "./resolveMustVisits";
+
+/** Ensure the accommodation has coordinates (geocode a name-only entry) so every
+ *  search/cluster is anchored to the destination, not searched globally. */
+async function withCoords(request: TripRequest, provider: ToolProvider): Promise<Location> {
+  const acc = request.accommodation;
+  if (typeof acc.lat === "number" && typeof acc.lng === "number") return acc;
+  const geo = await provider.geocode({ query: `${acc.name} ${request.destination}` });
+  return geo ? { name: acc.name, lat: geo.lat, lng: geo.lng } : acc;
+}
 
 export interface PreparedColdStart {
   spec: AgentSpec<PlanningState>;
@@ -25,7 +34,8 @@ export async function prepareColdStart(request: TripRequest, provider: ToolProvi
     for (const candidate of list) places.set(candidate.placeId, candidate);
   }
 
-  const resolvedRequest: TripRequest = { ...request, mustVisit: resolved.mustVisit };
+  const accommodation = await withCoords(request, provider);
+  const resolvedRequest: TripRequest = { ...request, accommodation, mustVisit: resolved.mustVisit };
   const spec = createColdStartSpec(resolvedRequest, provider, { details: resolved.details, places });
   return { spec, request: resolvedRequest, resolveErrors: resolved.errors };
 }
