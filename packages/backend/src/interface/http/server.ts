@@ -23,6 +23,7 @@ import { applyEdits } from "../../domain/applyEdits";
 import { estimateTravelMinutes } from "../../domain/travel";
 import { validate } from "../../domain/validate";
 import { createFileSessionStore } from "../../infrastructure/persistence/fileSessionStore";
+import { createFileTracer } from "../../infrastructure/observability/fileTracer";
 import { createProvider } from "../../infrastructure/tools/createProvider";
 import { createScriptedColdStartModel } from "../../infrastructure/llm/scriptedModelClient";
 import { createOpenAIModelClient } from "../../infrastructure/llm/openaiModelClient";
@@ -85,15 +86,18 @@ app.post("/api/sessions/:id/plan", async (c) => {
   const parsed = tripRequestSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "invalid trip request", issues: parsed.error.issues }, 400);
   const request = parsed.data as TripRequest;
+  const logPath = `logs/plan-${Date.now()}.ndjson`;
+  const tracer = createFileTracer(logPath, { console: true });
+  console.log(`\n=== plan: ${request.destination}, ${request.days}d → ${logPath} ===`);
   const prepared = await prepareColdStart(request, provider);
-  const model: ModelClient = hasOpenAI() ? createOpenAIModelClient({}) : createScriptedColdStartModel(prepared.request);
-  const result = await runAgent(prepared.spec, model);
+  const model: ModelClient = hasOpenAI() ? createOpenAIModelClient({ tracer }) : createScriptedColdStartModel(prepared.request);
+  const result = await runAgent(prepared.spec, model, tracer);
   const itinerary = result.state.itinerary;
   if (!itinerary) {
-    return c.json({ error: "planning produced no itinerary", validation: result.validation, resolveErrors: prepared.resolveErrors }, 422);
+    return c.json({ error: "planning produced no itinerary", validation: result.validation, resolveErrors: prepared.resolveErrors, trace: logPath }, 422);
   }
   await store.save(c.req.param("id"), itinerary);
-  return c.json({ itinerary, validation: result.validation, status: result.status, resolveErrors: prepared.resolveErrors });
+  return c.json({ itinerary, validation: result.validation, status: result.status, resolveErrors: prepared.resolveErrors, trace: logPath });
 });
 
 app.post("/api/sessions/:id/ops", async (c) => {
@@ -118,14 +122,18 @@ app.post("/api/sessions/:id/chat", async (c) => {
   const instruction = typeof body.instruction === "string" ? body.instruction.trim() : "";
   if (!instruction) return c.json({ error: "instruction required" }, 400);
   const details = await resolveItineraryDetails(itinerary, provider);
+  const logPath = `logs/chat-${Date.now()}.ndjson`;
+  const tracer = createFileTracer(logPath, { console: true });
+  console.log(`\n=== chat: "${instruction}" → ${logPath} ===`);
   const spec = createWarmEditSpec(itinerary, instruction, provider, details);
-  const result = await runAgent(spec, createOpenAIModelClient({}));
+  const result = await runAgent(spec, createOpenAIModelClient({ tracer }), tracer);
   if (result.state.finalized) await store.save(id, result.state.itinerary);
   return c.json({
     itinerary: result.state.itinerary,
     validation: result.validation,
     status: result.status,
     finalized: result.state.finalized,
+    trace: logPath,
   });
 });
 
