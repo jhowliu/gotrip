@@ -94,8 +94,12 @@ const pad2 = (n: number): string => String(n).padStart(2, "0");
 export function openingHoursToWindow(hours?: { periods?: GooglePeriod[] }): [string, string] | undefined {
   const period = hours?.periods?.[0];
   if (!period?.open || !period.close) return undefined;
+  const openMin = (period.open.hour ?? 0) * 60 + (period.open.minute ?? 0);
+  const closeMin = (period.close.hour ?? 0) * 60 + (period.close.minute ?? 0);
   const open = `${pad2(period.open.hour ?? 0)}:${pad2(period.open.minute ?? 0)}`;
-  const close = `${pad2(period.close.hour ?? 0)}:${pad2(period.close.minute ?? 0)}`;
+  // A close at/after midnight (00:00, or a later day) wraps below the open time;
+  // for single-day scheduling, clamp it to end of day so it isn't read as "closed".
+  const close = closeMin <= openMin ? "23:59" : `${pad2(period.close.hour ?? 0)}:${pad2(period.close.minute ?? 0)}`;
   return [open, close];
 }
 

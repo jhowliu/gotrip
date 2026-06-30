@@ -44,6 +44,15 @@ describe("googleMappers", () => {
     expect(openingHoursToWindow(undefined)).toBeUndefined();
   });
 
+  it("clamps a midnight / past-midnight close to end of day (else it reads as closed)", () => {
+    // open 06:00, close 00:00 (midnight) — was wrapping to [06:00,00:00] and flagging everything closed.
+    expect(openingHoursToWindow({ periods: [{ open: { day: 1, hour: 6 }, close: { day: 2, hour: 0, minute: 0 } }] })).toEqual(["06:00", "23:59"]);
+    // open 18:00, close 02:00 next day → clamp.
+    expect(openingHoursToWindow({ periods: [{ open: { day: 1, hour: 18 }, close: { day: 2, hour: 2 } }] })).toEqual(["18:00", "23:59"]);
+    // normal same-day window is untouched.
+    expect(openingHoursToWindow({ periods: [{ open: { day: 1, hour: 9 }, close: { day: 1, hour: 17, minute: 30 } }] })).toEqual(["09:00", "17:30"]);
+  });
+
   it("maps google types to a category by priority, falling back to landmark", () => {
     expect(googleTypesToCategory(["place_of_worship", "tourist_attraction"])).toBe("temple");
     expect(googleTypesToCategory(["park"])).toBe("park");
