@@ -84,6 +84,10 @@ const noInput = z.object({}).passthrough();
 
 function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
   return [
+    /**
+     * in:  { query: "museums", type?: "attraction", maxResults?: 10 }
+     * out: [{ ref: "r1", name: "Tokyo National Museum", category: "museum", rating?: 4.5, priceLevel?: 2, shortAddress?: "…" }, …]
+     */
     {
       name: "searchPlaces",
       description: "Search for candidate places near the accommodation. Each result has a short `ref` — pass it to getPlaceDetails.",
@@ -112,6 +116,10 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
         return { content: summaries };
       },
     },
+    /**
+     * in:  { ref: "r1" }
+     * out: { ref: "r1", name: "…", category: "museum", openWindow?: ["09:00","17:00"], ticketPrice?: 600, rating?: 4.5 }
+     */
     {
       name: "getPlaceDetails",
       description: "Fetch full details (coords, opening window, visit minutes, ticket price) for a place by its `ref` from searchPlaces.",
@@ -133,6 +141,10 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
         };
       },
     },
+    /**
+     * in:  { fromRef: "r1", toRef: "r3", mode?: "transit" }
+     * out: { durationMinutes: 18, distanceMeters: 3570, mode: "transit" }
+     */
     {
       name: "getTravelTime",
       description: "Travel time between two places you've detailed, given their refs.",
@@ -152,6 +164,10 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
         return { content: travel };
       },
     },
+    /**
+     * in:  { items: [{ label: "tickets", amount: 600 }, { label: "lunch", amount: 300 }] }
+     * out: { total: 900, breakdown: [{ label: "tickets", amount: 600 }, …] }
+     */
     {
       name: "estimateCost",
       description: "Sum a list of cost items.",
@@ -161,6 +177,10 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
         return { content: estimateCost(items) };
       },
     },
+    /**
+     * in:  {}    (operates on the details already gathered)
+     * out: [{ dayIndex: 1, placeIds: ["…","…"] }, { dayIndex: 2, placeIds: ["…"] }]
+     */
     {
       name: "clusterByDay",
       description: "Cluster all detailed places across the requested number of days (coordinate distance only).",
@@ -185,6 +205,9 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
         return { content: assignments };
       },
     },
+    /**
+     * in:  {}    out: [{ dayIndex, placeIds: […] }, …]   (re-balanced; use for DAY_TOO_TIGHT)
+     */
     {
       name: "rebalanceDays",
       description: "Re-balance the day assignments so no day exceeds its time budget. Use when finalize reports DAY_TOO_TIGHT.",
@@ -202,6 +225,9 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
         return { content: state.assignments };
       },
     },
+    /**
+     * in:  {}    out: [{ dayIndex, placeIds: […] }, …]   (pricey non-must-visits dropped; use for BUDGET_EXCEEDED)
+     */
     {
       name: "trimToBudget",
       description:
@@ -224,6 +250,10 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
         return { content: state.assignments };
       },
     },
+    /**
+     * in:  { respectWindows?: true }
+     * out: { days: 2, totalCost: 660 }    (the full draft is kept in state)
+     */
     {
       name: "assembleItinerary",
       description:
@@ -246,6 +276,11 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
         return { content: { days: draft.days.length, totalCost: draft.totalCost } };
       },
     },
+    /**
+     * in:  {}
+     * out (ok):    { ok: true, totalCost: 660, softWarnings: [{ code: "MEAL_OUT_OF_WINDOW", … }] }   (final)
+     * out (retry): { hardViolations: [{ code: "DAY_TOO_TIGHT", message: "…" }] }                    (isError)
+     */
     {
       name: "finalizeItinerary",
       description: "Validate the draft and finalize. Returns hard violations to fix, or finalizes on success.",

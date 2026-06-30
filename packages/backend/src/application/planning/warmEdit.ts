@@ -47,6 +47,10 @@ const noInput = z.object({}).passthrough();
 
 function buildWarmTools(provider: ToolProvider): ToolDef<WarmEditState>[] {
   return [
+    /**
+     * in:  { query: "ramen", type?: "restaurant", maxResults?: 5 }
+     * out: [{ placeId: "…", name: "…", category: "restaurant", rating?: 4.4 }, …]
+     */
     {
       name: "searchPlaces",
       description: "Search for a place to add (by name/keyword) near the accommodation.",
@@ -63,6 +67,10 @@ function buildWarmTools(provider: ToolProvider): ToolDef<WarmEditState>[] {
         return { content: results };
       },
     },
+    /**
+     * in:  { placeId: "…" }
+     * out: { placeId, name, category, location, openWindow?, ticketPrice?, rating? }
+     */
     {
       name: "getPlaceDetails",
       description: "Fetch full details for a place (needed before adding it to a day).",
@@ -74,6 +82,14 @@ function buildWarmTools(provider: ToolProvider): ToolDef<WarmEditState>[] {
         return { content: detail };
       },
     },
+    /**
+     * in:  { operations: [{ op: "move", itemId: "d1-v3", toDay: 2, atTime?: "09:00" },
+     *                      { op: "setDuration", itemId, minutes: 90 }, { op: "remove"|"pin", itemId },
+     *                      { op: "add", placeId, day }] }
+     * out (ok):       { ok: true, totalCost, softWarnings: [...] }
+     * out (illegal):  { error: "invalid edit", details: [...] }                       (isError)
+     * out (conflict): { rejected: true, reason, hardViolations: [...] }               (isError — report, don't force)
+     */
     {
       name: "applyEdits",
       description:
@@ -104,6 +120,11 @@ function buildWarmTools(provider: ToolProvider): ToolDef<WarmEditState>[] {
         };
       },
     },
+    /**
+     * in:  {}
+     * out (ok):    { ok: true, totalCost, softWarnings: [...] }                  (final)
+     * out (retry): { error: "itinerary has hard violations", hardViolations }    (isError)
+     */
     {
       name: "finishEditing",
       description: "Finalize after a successful edit. Returns the validated itinerary.",
