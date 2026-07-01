@@ -44,7 +44,7 @@ function lastToolResultContent(history: HistoryItem[]): unknown {
   return null;
 }
 
-function lastSearchPlaceIds(history: HistoryItem[]): string[] {
+function lastSearchRefs(history: HistoryItem[]): string[] {
   const names = callNames(history);
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const entry = history[i];
@@ -53,7 +53,7 @@ function lastSearchPlaceIds(history: HistoryItem[]): string[] {
     try {
       const data: unknown = JSON.parse(entry.content);
       if (Array.isArray(data)) {
-        return (data as Place[]).map((p) => p.placeId).filter((id): id is string => typeof id === "string");
+        return (data as { ref?: string }[]).map((p) => p.ref).filter((r): r is string => typeof r === "string");
       }
     } catch {
       /* ignore */
@@ -92,12 +92,13 @@ export function createScriptedColdStartModel(request: TripRequest): ModelClient 
 
         case "details": {
           phase = "cluster";
-          const searched = lastSearchPlaceIds(req.history);
+          const searched = lastSearchRefs(req.history);
+          // must-visits aren't from search (no ref) — pass their id; the tool tolerates it.
           const mustVisit = (request.mustVisit ?? [])
             .map((m) => m.placeId)
             .filter((id): id is string => typeof id === "string");
-          const ids = [...new Set([...searched, ...mustVisit])];
-          return { kind: "tool_use", calls: ids.map((placeId) => call("getPlaceDetails", { placeId })) };
+          const refs = [...new Set([...searched, ...mustVisit])];
+          return { kind: "tool_use", calls: refs.map((ref) => call("getPlaceDetails", { ref })) };
         }
 
         case "cluster":

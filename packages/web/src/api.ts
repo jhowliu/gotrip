@@ -45,6 +45,23 @@ export type EditOp =
   | { op: "setDuration"; itemId: string; minutes: number }
   | { op: "pin"; itemId: string };
 
+export interface TransitStep {
+  mode: "walk" | "transit";
+  durationMinutes?: number;
+  line?: string;
+  vehicle?: string;
+  from?: string;
+  to?: string;
+  stops?: number;
+}
+
+export interface TransitRoute {
+  legs: TransitStep[];
+  summary: string;
+  durationMinutes: number;
+  distanceMeters: number;
+}
+
 export interface ApiResult<T> {
   ok: boolean;
   status: number;
@@ -70,24 +87,31 @@ export interface SessionPayload {
   finalized?: boolean;
   changed?: boolean;
   errors?: string[];
+  resolveErrors?: string[];
   error?: string;
 }
 
-export const getConfig = (): Promise<ApiResult<{ chatEnabled: boolean }>> => call("/api/config");
+export interface PlanRequest {
+  destination: string;
+  days: number;
+  accommodation: { name: string; lat?: number; lng?: number };
+  mustVisit?: { name: string }[];
+  budget?: { min?: number; max: number };
+  pace?: "relaxed" | "packed";
+}
+
+export const getConfig = (): Promise<ApiResult<{ chatEnabled: boolean; provider?: string }>> => call("/api/config");
 
 export const loadSession = (): Promise<ApiResult<SessionPayload>> => call(`/api/sessions/${SID}`);
 
-export const planTrip = (): Promise<ApiResult<SessionPayload>> =>
-  postJson(`/api/sessions/${SID}/plan`, {
-    days: 2,
-    destination: "Tokyo",
-    accommodation: { name: "Shinjuku Hotel", lat: 35.6938, lng: 139.7034 },
-    mustVisit: [{ name: "teamLab Planets", placeId: "p_teamlab" }],
-    pace: "relaxed",
-  });
+export const planTrip = (request: PlanRequest): Promise<ApiResult<SessionPayload>> =>
+  postJson(`/api/sessions/${SID}/plan`, request);
 
 export const applyOps = (operations: EditOp[]): Promise<ApiResult<SessionPayload>> =>
   postJson(`/api/sessions/${SID}/ops`, { operations });
 
 export const sendChat = (instruction: string): Promise<ApiResult<SessionPayload>> =>
   postJson(`/api/sessions/${SID}/chat`, { instruction });
+
+export const getRoute = (from: string, to: string): Promise<ApiResult<{ route: TransitRoute | null }>> =>
+  call(`/api/route?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);

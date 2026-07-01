@@ -85,6 +85,25 @@ export interface TravelTime {
   mode: TravelMode;
 }
 
+/** One leg of a transit journey — a walk segment or a ride on a line. */
+export interface TransitStep {
+  mode: "walk" | "transit";
+  durationMinutes?: number;
+  line?: string; // e.g. "Bannan Line" / "BL"
+  vehicle?: string; // SUBWAY / BUS / TRAIN …
+  from?: string; // board stop
+  to?: string; // alight stop
+  stops?: number; // intermediate stop count
+}
+
+/** A door-to-door transit route with a human-readable summary (Google, covered regions). */
+export interface TransitRoute {
+  legs: TransitStep[];
+  summary: string;
+  durationMinutes: number;
+  distanceMeters: number;
+}
+
 export type ItemKind = "visit" | "meal" | "transit";
 
 /**
