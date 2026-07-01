@@ -58,7 +58,10 @@ export interface Place {
   name: string;
   category: string;
   rating?: number;
+  userRatingCount?: number;
   priceLevel?: PriceLevel;
+  /** Google's single most-relevant type — finer than `category`, used for dedup. */
+  primaryType?: string;
   shortAddress?: string;
 }
 
@@ -72,7 +75,11 @@ export interface PlaceDetail {
   /** Daily open window ["HH:MM","HH:MM"] for timing checks. Omitted = always open. */
   openWindow?: [string, string];
   rating?: number;
+  /** How many users rated it — a popularity signal that weights rating in curation. */
+  userRatingCount?: number;
   priceLevel?: PriceLevel;
+  /** Google's single most-relevant type — finer than `category`, used for dedup. */
+  primaryType?: string;
   estimatedVisitMinutes?: number;
   ticketPrice?: number;
 }

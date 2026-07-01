@@ -1,5 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { clusterByDay, haversineMeters } from "../src/domain/clusterByDay";
+import { clusterByCost, clusterByDay, haversineMeters } from "../src/domain/clusterByDay";
+
+describe("clusterByCost", () => {
+  it("keeps a far-by-road place (e.g. an island) off the near cluster", () => {
+    // p1,p2 are close; p3 is far from both by real road time (short as the crow flies).
+    const cost = (a: string, b: string): number => ([a, b].sort().join("-") === "p1-p2" ? 5 : 100);
+    const centerCost = (id: string): number => (id === "p3" ? 90 : 10);
+
+    const result = clusterByCost({ ids: ["p1", "p2", "p3"], days: 2, cost, centerCost });
+    const dayOf = (id: string): number => result.find((d) => d.placeIds.includes(id))!.dayIndex;
+
+    expect(dayOf("p1")).toBe(dayOf("p2")); // the near pair shares a day
+    expect(dayOf("p3")).not.toBe(dayOf("p1")); // the island is on its own day
+    expect(result.find((d) => d.placeIds.includes("p3"))!.placeIds).toEqual(["p3"]);
+  });
+
+  it("honours pinned day assignments", () => {
+    const result = clusterByCost({
+      ids: ["a", "b"],
+      days: 2,
+      cost: () => 10,
+      pinned: [{ id: "a", dayIndex: 2 }],
+    });
+    expect(result.find((d) => d.dayIndex === 2)!.placeIds).toContain("a");
+  });
+});
 
 describe("clusterByDay", () => {
   it("assigns every place exactly once across the requested number of days", () => {
