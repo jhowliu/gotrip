@@ -34,8 +34,10 @@ export interface GooglePlace {
   formattedAddress?: string;
   location?: { latitude: number; longitude: number };
   rating?: number;
+  userRatingCount?: number;
   priceLevel?: string; // "PRICE_LEVEL_*"
   types?: string[];
+  primaryType?: string; // finer than our collapsed category — used for dedup
   regularOpeningHours?: { periods?: GooglePeriod[] };
 }
 
@@ -116,6 +118,8 @@ export function mapPlaceDetail(place: GooglePlace): PlaceDetail {
   const window = openingHoursToWindow(place.regularOpeningHours);
   if (window) detail.openWindow = window;
   if (typeof place.rating === "number") detail.rating = place.rating;
+  if (typeof place.userRatingCount === "number") detail.userRatingCount = place.userRatingCount;
+  if (place.primaryType) detail.primaryType = place.primaryType;
   const price = mapPriceLevel(place.priceLevel);
   if (price !== undefined) detail.priceLevel = price;
   return detail;
@@ -128,6 +132,8 @@ export function mapPlaceSummary(place: GooglePlace): Place {
     category: googleTypesToCategory(place.types),
   };
   if (typeof place.rating === "number") summary.rating = place.rating;
+  if (typeof place.userRatingCount === "number") summary.userRatingCount = place.userRatingCount;
+  if (place.primaryType) summary.primaryType = place.primaryType;
   const price = mapPriceLevel(place.priceLevel);
   if (price !== undefined) summary.priceLevel = price;
   if (place.formattedAddress) summary.shortAddress = place.formattedAddress;
@@ -213,6 +219,28 @@ export function mapTransitRoute(resp: GoogleTransitResponse): TransitRoute | nul
   }
   if (legs.length === 0) return null;
   return { legs, summary: formatTransitSummary(legs), durationMinutes: toMinutes(route.duration), distanceMeters: route.distanceMeters ?? 0 };
+}
+
+// ---- Routes API (computeRouteMatrix) ----
+
+export interface GoogleMatrixElement {
+  originIndex?: number;
+  destinationIndex?: number;
+  duration?: string;
+  condition?: string; // "ROUTE_EXISTS" | "ROUTE_NOT_FOUND"
+}
+
+/** Fold the flat element list into an n×n minutes matrix (missing/unroutable → 0). */
+export function mapRouteMatrix(elements: GoogleMatrixElement[], n: number): number[][] {
+  const matrix = Array.from({ length: n }, () => new Array<number>(n).fill(0));
+  for (const el of elements) {
+    const i = el.originIndex;
+    const j = el.destinationIndex;
+    if (typeof i !== "number" || typeof j !== "number") continue;
+    if (el.condition === "ROUTE_NOT_FOUND") continue;
+    if (matrix[i]) matrix[i]![j] = toMinutes(el.duration);
+  }
+  return matrix;
 }
 
 export interface GoogleRoutesResponse {

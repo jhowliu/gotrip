@@ -5,6 +5,7 @@ import {
   mapPlaceDetail,
   mapPriceLevel,
   mapRoute,
+  mapRouteMatrix,
   mapTextSearch,
   mapTransitRoute,
   openingHoursToWindow,
@@ -17,8 +18,10 @@ const TEAMLAB: GooglePlace = {
   formattedAddress: "6 Chome-1-16 Toyosu, Koto City, Tokyo",
   location: { latitude: 35.6499, longitude: 139.7903 },
   rating: 4.5,
+  userRatingCount: 1234,
   priceLevel: "PRICE_LEVEL_EXPENSIVE",
   types: ["tourist_attraction", "museum", "point_of_interest"],
+  primaryType: "museum",
   regularOpeningHours: {
     periods: [{ open: { day: 0, hour: 9, minute: 0 }, close: { day: 0, hour: 22, minute: 0 } }],
   },
@@ -34,6 +37,8 @@ describe("googleMappers", () => {
       location: { name: "teamLab Planets TOKYO", lat: 35.6499, lng: 139.7903 },
       openWindow: ["09:00", "22:00"],
       rating: 4.5,
+      userRatingCount: 1234,
+      primaryType: "museum",
       priceLevel: 3,
     });
   });
@@ -77,6 +82,8 @@ describe("googleMappers", () => {
       name: "teamLab Planets TOKYO",
       category: "museum",
       rating: 4.5,
+      userRatingCount: 1234,
+      primaryType: "museum",
       priceLevel: 3,
       shortAddress: "6 Chome-1-16 Toyosu, Koto City, Tokyo",
     });
@@ -134,5 +141,21 @@ describe("googleMappers", () => {
   it("returns null when there is no transit route", () => {
     expect(mapTransitRoute({})).toBeNull();
     expect(mapTransitRoute({ routes: [{ legs: [] }] })).toBeNull();
+  });
+
+  it("folds a route-matrix element list into an n×n minutes matrix", () => {
+    const elements = [
+      { originIndex: 0, destinationIndex: 1, duration: "600s", condition: "ROUTE_EXISTS" },
+      { originIndex: 1, destinationIndex: 0, duration: "660s", condition: "ROUTE_EXISTS" },
+    ];
+    expect(mapRouteMatrix(elements, 2)).toEqual([
+      [0, 10],
+      [11, 0],
+    ]);
+    // unroutable pairs stay 0 (caller backfills with a geometric estimate)
+    expect(mapRouteMatrix([{ originIndex: 0, destinationIndex: 1, condition: "ROUTE_NOT_FOUND" }], 2)).toEqual([
+      [0, 0],
+      [0, 0],
+    ]);
   });
 });

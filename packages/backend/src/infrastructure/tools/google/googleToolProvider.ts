@@ -14,9 +14,11 @@ import {
   mapGeocode,
   mapPlaceDetail,
   mapRoute,
+  mapRouteMatrix,
   mapTextSearch,
   mapTransitRoute,
   type GoogleGeocodeResponse,
+  type GoogleMatrixElement,
   type GooglePlace,
   type GoogleRoutesResponse,
   type GoogleTextSearchResponse,
@@ -25,11 +27,13 @@ import {
 
 const PLACES_BASE = "https://places.googleapis.com/v1";
 const ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes";
+const MATRIX_URL = "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix";
 const GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json";
 
-const DETAIL_MASK = "id,displayName,formattedAddress,location,rating,priceLevel,types,regularOpeningHours";
+const DETAIL_MASK =
+  "id,displayName,formattedAddress,location,rating,userRatingCount,priceLevel,types,primaryType,regularOpeningHours";
 const SEARCH_MASK =
-  "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.priceLevel,places.types";
+  "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.types,places.primaryType";
 
 const TRAVEL_MODE: Readonly<Record<TravelMode, string>> = { transit: "TRANSIT", walking: "WALK", driving: "DRIVE" };
 
@@ -109,6 +113,33 @@ export function createGoogleToolProvider(opts: GoogleProviderOptions): ToolProvi
         distanceMeters: Math.round(haversineMeters(input.origin, input.destination)),
         mode,
       };
+    },
+
+    async getTravelMatrix(input): Promise<number[][]> {
+      const points = input.points;
+      const n = points.length;
+      if (n < 2) return [[0]];
+      // The matrix API covers DRIVE/WALK (not TRANSIT); driving is a good proxy
+      // for ordering + timing and far more accurate than straight-line distance.
+      const mode = input.mode === "walking" ? "WALK" : "DRIVE";
+      const waypoints = points.map((p) => ({ waypoint: { location: { latLng: latLng(p) } } }));
+      const elements = await requestJson<GoogleMatrixElement[]>(MATRIX_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": key,
+          "X-Goog-FieldMask": "originIndex,destinationIndex,duration,condition",
+        },
+        body: JSON.stringify({ origins: waypoints, destinations: waypoints, travelMode: mode }),
+      });
+      const matrix = mapRouteMatrix(elements, n);
+      // Backfill any pair Google couldn't route with the geometric estimate.
+      for (let i = 0; i < n; i += 1) {
+        for (let j = 0; j < n; j += 1) {
+          if (i !== j && !matrix[i]![j]) matrix[i]![j] = estimateTravelMinutes(points[i]!, points[j]!, "driving");
+        }
+      }
+      return matrix;
     },
 
     async geocode(input: { query: string }): Promise<GeoLocation | null> {

@@ -72,6 +72,13 @@ export function createMockToolProvider(places: PlaceDetail[]): ToolProvider {
       };
     },
 
+    async getTravelMatrix(input) {
+      const mode = input.mode ?? "driving";
+      return input.points.map((a) =>
+        input.points.map((b) => (a === b ? 0 : estimateTravelMinutes(a, b, mode))),
+      );
+    },
+
     async geocode(input: { query: string }) {
       const q = input.query.toLowerCase();
       const match = places.find(
