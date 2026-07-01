@@ -20,6 +20,11 @@ export interface GetTravelTimeInput {
   mode?: TravelMode;
 }
 
+export interface GetTravelMatrixInput {
+  points: GeoLocation[];
+  mode?: TravelMode;
+}
+
 export interface ToolProvider {
   searchPlaces(input: SearchPlacesInput): Promise<Place[]>;
   getPlaceDetails(input: { placeId: string }): Promise<PlaceDetail>;
@@ -29,4 +34,11 @@ export interface ToolProvider {
   /** Door-to-door transit route with line/transfer detail. Null when unavailable
    *  (mock, or a region without transit coverage). */
   getTransitRoute(input: GetTravelTimeInput): Promise<TransitRoute | null>;
+  /**
+   * Real travel-time matrix (minutes) between `points` — `m[i][j]` = i→j. Used to
+   * order and time a day with real road distances instead of straight-line ones.
+   * Optional capability: callers fall back to a geometric estimate when absent.
+   * Google's matrix API covers driving/walking (not transit).
+   */
+  getTravelMatrix?(input: GetTravelMatrixInput): Promise<number[][]>;
 }

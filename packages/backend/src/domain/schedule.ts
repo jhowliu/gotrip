@@ -17,16 +17,19 @@ import type {
   PlaceDetail,
   TripRequest,
 } from "./itinerary";
-import { haversineMeters } from "./clusterByDay";
+import { orderByShortestPath } from "./route";
+import { estimateMealCost } from "./pricing";
 import {
   ARRIVAL_TRANSFER_MINUTES,
   DAY_START,
   MEAL_SLOTS,
   TRANSIT_BUFFER_MINUTES,
   addMinutes,
+  endTime,
   timeOfDayFromIso,
   toMinutes,
   visitMinutes,
+  withinWindow,
   type MealSlot,
 } from "./timing";
 
@@ -46,6 +49,8 @@ export interface ScheduleInput {
   /** Injected travel estimate (minutes) between two points. */
   legMinutes: (from: GeoLocation, to: GeoLocation) => number;
   mustVisitIds?: ReadonlySet<string>;
+  /** Candidate restaurants per day (1-based) — placed into meal slots, not as visits. */
+  mealsByDay?: ReadonlyMap<number, PlaceDetail[]>;
   options?: ScheduleOptions;
 }
 
@@ -54,27 +59,18 @@ function accommodationPoint(request: TripRequest): GeoLocation | null {
   return typeof lat === "number" && typeof lng === "number" ? { name, lat, lng } : null;
 }
 
-function nearestNeighborOrder(places: PlaceDetail[], start: GeoLocation | null): PlaceDetail[] {
-  const remaining = [...places];
-  const ordered: PlaceDetail[] = [];
-  let cursor: { lat: number; lng: number } | null = start;
-  while (remaining.length > 0) {
-    let bestIdx = 0;
-    if (cursor) {
-      let bestDist = Number.POSITIVE_INFINITY;
-      remaining.forEach((p, i) => {
-        const d = haversineMeters(cursor!, p.location);
-        if (d < bestDist) {
-          bestDist = d;
-          bestIdx = i;
-        }
-      });
-    }
-    const next = remaining.splice(bestIdx, 1)[0]!;
-    ordered.push(next);
-    cursor = next.location;
-  }
-  return ordered;
+/** Opens after this, or closes before it → the visit must be timed, so order it up front. */
+const ORDER_OPEN_LIMIT = "10:00";
+const ORDER_CLOSE_LIMIT = "16:00";
+
+/**
+ * A window only constrains ordering if it's genuinely restrictive (a morning-only
+ * or early-closing place). All-day windows — the common case in real data — don't,
+ * so those flow through shortest-path ordering instead of pinning the sequence.
+ */
+function constrainsOrder(window?: [string, string]): boolean {
+  if (!window) return false;
+  return toMinutes(window[0]) > toMinutes(ORDER_OPEN_LIMIT) || toMinutes(window[1]) < toMinutes(ORDER_CLOSE_LIMIT);
 }
 
 function orderPlaces(placeIds: string[], input: ScheduleInput, start: GeoLocation | null): PlaceDetail[] {
@@ -82,18 +78,22 @@ function orderPlaces(placeIds: string[], input: ScheduleInput, start: GeoLocatio
     .map((id) => input.details.get(id))
     .filter((d): d is PlaceDetail => d !== undefined);
 
-  if (input.options?.respectWindows ?? true) {
-    // windowed places first (earliest window first), so they land in their slot
-    const windowed = detailed
-      .filter((d) => d.openWindow)
-      .sort((a, b) => toMinutes(a.openWindow![0]) - toMinutes(b.openWindow![0]));
-    const rest = nearestNeighborOrder(
-      detailed.filter((d) => !d.openWindow),
-      start,
-    );
-    return [...windowed, ...rest];
+  // Order by the injected travel cost (real matrix when available, else geometric)
+  // so the route reflects actual road distances rather than straight lines.
+  const cost = input.legMinutes;
+  if (!(input.options?.respectWindows ?? true)) {
+    // Naive order (no window awareness) — used to exercise self-correction.
+    return orderByShortestPath(detailed, start, cost);
   }
-  return nearestNeighborOrder(detailed, start);
+
+  // Time-restricted places first (earliest window first) so they land in their slot;
+  // everything else is routed by shortest path, continuing from the last fixed stop.
+  const constrained = detailed
+    .filter((d) => constrainsOrder(d.openWindow))
+    .sort((a, b) => toMinutes(a.openWindow![0]) - toMinutes(b.openWindow![0]));
+  const free = detailed.filter((d) => !constrainsOrder(d.openWindow));
+  const anchor = constrained.length > 0 ? constrained[constrained.length - 1]!.location : start;
+  return [...constrained, ...orderByShortestPath(free, anchor, cost)];
 }
 
 /** Insert any meal whose preferred start has been reached and is still in-window. */
@@ -102,6 +102,7 @@ function placeDueMeals(
   pending: MealSlot[],
   cursor: string,
   dayIndex: number,
+  mealCandidates: PlaceDetail[],
 ): string {
   let c = cursor;
   for (let i = pending.length - 1; i >= 0; i -= 1) {
@@ -111,18 +112,37 @@ function placeDueMeals(
       pending.splice(i, 1); // window missed — drop it
       continue;
     }
+    // Prefer a real restaurant open at this meal time; else a generic meal block.
+    const pickIdx = bestMealCandidate(mealCandidates, c, meal.durationMinutes);
+    const restaurant = pickIdx >= 0 ? mealCandidates.splice(pickIdx, 1)[0]! : null;
     items.push({
       itemId: `d${dayIndex}-meal-${meal.label.toLowerCase()}`,
       kind: "meal",
-      name: meal.label,
+      name: restaurant ? restaurant.name : meal.label,
       startTime: c,
       durationMinutes: meal.durationMinutes,
       mealWindow: meal.window,
+      ...(restaurant ? { placeId: restaurant.placeId, estimatedCost: estimateMealCost(restaurant.priceLevel) } : {}),
     });
     c = addMinutes(c, meal.durationMinutes);
     pending.splice(i, 1);
   }
   return c;
+}
+
+/** Highest-rated candidate open across [start, start+duration]; -1 if none fit. */
+function bestMealCandidate(candidates: PlaceDetail[], start: string, durationMinutes: number): number {
+  let best = -1;
+  let bestRating = -1;
+  candidates.forEach((c, i) => {
+    if (c.openWindow && !withinWindow(start, durationMinutes, c.openWindow)) return;
+    const rating = c.rating ?? 0;
+    if (rating > bestRating) {
+      bestRating = rating;
+      best = i;
+    }
+  });
+  return best;
 }
 
 export function dayStartTime(dayIndex: number, request: TripRequest): string {
@@ -167,9 +187,11 @@ export function layoutDay(
   dayStart: string,
   legMinutes: (a: GeoLocation, b: GeoLocation) => number,
   respectWindows = true,
+  mealCandidates: PlaceDetail[] = [],
 ): ItineraryItem[] {
   const items: ItineraryItem[] = [];
   const pending = [...MEAL_SLOTS];
+  const meals = [...mealCandidates]; // mutated as candidates are consumed
   let cursor = dayStart;
   let prev: LayoutVisit | null = null;
   let seq = 0;
@@ -189,7 +211,7 @@ export function layoutDay(
       cursor = addMinutes(cursor, dur);
     }
 
-    cursor = placeDueMeals(items, pending, cursor, dayIndex);
+    cursor = placeDueMeals(items, pending, cursor, dayIndex, meals);
 
     let start_ = cursor;
     if (respectWindows && v.openWindow && toMinutes(start_) < toMinutes(v.openWindow[0])) {
@@ -210,7 +232,7 @@ export function layoutDay(
     prev = v;
   }
 
-  placeDueMeals(items, pending, cursor, dayIndex);
+  placeDueMeals(items, pending, cursor, dayIndex, meals);
   items.sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
   return items;
 }
@@ -225,6 +247,7 @@ function scheduleDay(assignment: DayAssignment, input: ScheduleInput, start: Geo
     dayStartTime(assignment.dayIndex, input.request),
     input.legMinutes,
     input.options?.respectWindows ?? true,
+    input.mealsByDay?.get(assignment.dayIndex) ?? [],
   );
   return { dayIndex: assignment.dayIndex, items };
 }
@@ -237,4 +260,29 @@ export function scheduleItinerary(input: ScheduleInput): Itinerary {
     0,
   );
   return { request: input.request, days, totalCost };
+}
+
+/** Per-day travel time is a legibility/quality signal — a lopsided plan (one heavy
+ *  day, one light) or an over-long day shows up here for the agent to rebalance. */
+export interface DaySummary {
+  day: number;
+  visits: number;
+  travelMinutes: number;
+  endsAt: string;
+}
+
+export function summariseDays(itinerary: Itinerary): { totalTravelMinutes: number; days: DaySummary[] } {
+  const days = itinerary.days.map((d) => {
+    const travelMinutes = d.items
+      .filter((i) => i.kind === "transit")
+      .reduce((s, i) => s + i.durationMinutes, 0);
+    const last = d.items[d.items.length - 1];
+    return {
+      day: d.dayIndex,
+      visits: d.items.filter((i) => i.kind === "visit").length,
+      travelMinutes,
+      endsAt: last ? endTime(last) : DAY_START,
+    };
+  });
+  return { totalTravelMinutes: days.reduce((s, d) => s + d.travelMinutes, 0), days };
 }

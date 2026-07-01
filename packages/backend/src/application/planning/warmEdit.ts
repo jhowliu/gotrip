@@ -26,6 +26,7 @@ import { applyEdits, type EditOp } from "../../domain/applyEdits";
 import { editOpsSchema } from "../editing/editOps";
 import { validate } from "../../domain/validate";
 import { estimateTravelMinutes } from "../../domain/travel";
+import { baseModel, escalationModel } from "./models";
 
 export interface WarmEditState {
   itinerary: Itinerary; // current; only valid edits are committed here
@@ -195,8 +196,8 @@ export function createWarmEditSpec(
   return {
     instruction: WARM_INSTRUCTION,
     kickoff: `Current itinerary:\n${JSON.stringify(itinerary, null, 2)}\n\nUser request: ${userRequest}`,
-    model: "gpt-4o-mini", // cheap model for routine edits
-    escalationModel: "gpt-4o", // one-shot escalation when no progress is made
+    model: baseModel(), // cheap model for routine edits (OPENAI_MODEL)
+    escalationModel: escalationModel() ?? "gpt-4o", // one-shot escalation when no progress is made
     constraints: { maxIterations: 12, maxTokens: 100_000, runtimeMs: 45_000 },
     tools: buildWarmTools(provider),
     initialState: { itinerary, details, places: new Map(), finalized: false },

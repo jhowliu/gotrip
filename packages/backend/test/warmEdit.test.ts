@@ -3,6 +3,7 @@ import type { Itinerary, PlaceDetail, TripRequest } from "../src/domain/itinerar
 import { runAgent } from "../src/application/agent/runAgent";
 import { createWarmEditSpec } from "../src/application/planning/warmEdit";
 import { scheduleItinerary } from "../src/domain/schedule";
+import { estimateTravelMinutes } from "../src/domain/travel";
 import { createScriptedWarmModel } from "../src/infrastructure/llm/scriptedWarmModel";
 import { createMockToolProvider } from "../src/infrastructure/tools/mock/mockToolProvider";
 import { TOKYO_ACCOMMODATION, TOKYO_PLACES } from "../src/infrastructure/tools/mock/fixtures";
@@ -18,7 +19,7 @@ function setup(): { itinerary: Itinerary; details: Map<string, PlaceDetail>; pro
       { dayIndex: 2, placeIds: ["p_teamlab", "p_ueno"] },
     ],
     details,
-    legMinutes: () => 15,
+    legMinutes: (a, b) => estimateTravelMinutes(a, b, "transit"), // geometric → deterministic order
   });
   return { itinerary, details, provider };
 }

@@ -80,6 +80,16 @@ export function paceDayEndCap(pace?: Pace): string {
   return "20:00";
 }
 
+/**
+ * Rough number of visits to aim for per day, by pace — drives how many candidate
+ * places curation keeps (targetCount = days × this). A soft target, not a cap.
+ */
+export function perDayVisitTarget(pace?: Pace): number {
+  if (pace === "relaxed") return 5;
+  if (pace === "packed") return 7;
+  return 6;
+}
+
 export interface MealSlot {
   label: string;
   window: [string, string];

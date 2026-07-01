@@ -13,6 +13,7 @@ export function withCache(provider: ToolProvider): ToolProvider {
   const geo = new Map<string, Promise<GeoLocation | null>>();
   const search = new Map<string, Promise<Place[]>>();
   const transit = new Map<string, Promise<TransitRoute | null>>();
+  const matrix = new Map<string, Promise<number[][]>>();
 
   const memo = <T>(cache: Map<string, Promise<T>>, key: string, run: () => Promise<T>): Promise<T> => {
     let hit = cache.get(key);
@@ -33,5 +34,11 @@ export function withCache(provider: ToolProvider): ToolProvider {
     getTravelTime: (input) => provider.getTravelTime(input),
     getTransitRoute: (input: GetTravelTimeInput) =>
       memo(transit, JSON.stringify([input.origin, input.destination]), () => provider.getTransitRoute(input)),
+    ...(provider.getTravelMatrix
+      ? {
+          getTravelMatrix: (input) =>
+            memo(matrix, JSON.stringify([input.points, input.mode]), () => provider.getTravelMatrix!(input)),
+        }
+      : {}),
   };
 }
