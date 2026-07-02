@@ -25,8 +25,9 @@ import {
   MEAL_SLOTS,
   TRANSIT_BUFFER_MINUTES,
   addMinutes,
-  endTime,
+  dayEndMinutes,
   timeOfDayFromIso,
+  toClock,
   toMinutes,
   visitMinutes,
   withinWindow,
@@ -51,6 +52,9 @@ export interface ScheduleInput {
   mustVisitIds?: ReadonlySet<string>;
   /** Candidate restaurants per day (1-based) — placed into meal slots, not as visits. */
   mealsByDay?: ReadonlyMap<number, PlaceDetail[]>;
+  /** Day indices (1-based) built around a far anchor — a long commute is expected,
+   *  so the day-end cap / light-day check don't apply. */
+  dayTripDays?: ReadonlySet<number>;
   options?: ScheduleOptions;
 }
 
@@ -249,7 +253,8 @@ function scheduleDay(assignment: DayAssignment, input: ScheduleInput, start: Geo
     input.options?.respectWindows ?? true,
     input.mealsByDay?.get(assignment.dayIndex) ?? [],
   );
-  return { dayIndex: assignment.dayIndex, items };
+  const dayTrip = input.dayTripDays?.has(assignment.dayIndex) ?? false;
+  return { dayIndex: assignment.dayIndex, items, ...(dayTrip ? { dayTrip: true } : {}) };
 }
 
 export function scheduleItinerary(input: ScheduleInput): Itinerary {
@@ -263,25 +268,40 @@ export function scheduleItinerary(input: ScheduleInput): Itinerary {
 }
 
 /** Per-day travel time is a legibility/quality signal — a lopsided plan (one heavy
- *  day, one light) or an over-long day shows up here for the agent to rebalance. */
+ *  day, one light) or an over-long day shows up here for the agent to rebalance.
+ *  `places` names the day's visits (must-visits flagged) so the agent can see WHAT
+ *  is on each day — e.g. a far pinned anchor that's blowing up the travel time. */
 export interface DaySummary {
   day: number;
   visits: number;
   travelMinutes: number;
+  /** Display end ("24:09" when the day runs past midnight — deliberately not wrapped). */
   endsAt: string;
+  /** Absolute end minutes (may exceed 1440) — what the day-end guards compare on. */
+  endsAtMinutes: number;
+  /** Visit names in order; a pinned must-visit is marked so the agent recognises it. */
+  places: string[];
+  /** Present when this is a day-trip day (long commute expected). */
+  dayTrip?: boolean;
 }
 
 export function summariseDays(itinerary: Itinerary): { totalTravelMinutes: number; days: DaySummary[] } {
-  const days = itinerary.days.map((d) => {
+  const days = itinerary.days.map((d): DaySummary => {
     const travelMinutes = d.items
       .filter((i) => i.kind === "transit")
       .reduce((s, i) => s + i.durationMinutes, 0);
-    const last = d.items[d.items.length - 1];
+    const endsAtMinutes = dayEndMinutes(d.items);
+    const places = d.items
+      .filter((i) => i.kind === "visit")
+      .map((i) => (i.pinned ? `${i.name} (must-visit)` : i.name));
     return {
       day: d.dayIndex,
-      visits: d.items.filter((i) => i.kind === "visit").length,
+      visits: places.length,
       travelMinutes,
-      endsAt: last ? endTime(last) : DAY_START,
+      endsAt: toClock(endsAtMinutes),
+      endsAtMinutes,
+      places,
+      ...(d.dayTrip ? { dayTrip: true } : {}),
     };
   });
   return { totalTravelMinutes: days.reduce((s, d) => s + d.travelMinutes, 0), days };

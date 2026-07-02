@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { scheduleItinerary } from "../src/domain/schedule";
+import { scheduleItinerary, summariseDays } from "../src/domain/schedule";
 import { withinWindow } from "../src/domain/timing";
-import type { GeoLocation, PlaceDetail, TripRequest } from "../src/domain/itinerary";
+import type { GeoLocation, Itinerary, ItineraryItem, PlaceDetail, TripRequest } from "../src/domain/itinerary";
 
 function detail(
   id: string,
@@ -149,5 +149,54 @@ describe("scheduleItinerary", () => {
     const genericLunch = generic.days[0]!.items.find((i) => i.kind === "meal")!;
     expect(genericLunch.name).toBe("Lunch");
     expect(genericLunch.placeId).toBeUndefined();
+  });
+
+  it("marks day-trip days from dayTripDays", () => {
+    const details = new Map([
+      ["c", detail("c", 35.69, 139.7, "park", 60)],
+      ["far", detail("far", 36.5, 140.5, "landmark", 60)],
+    ]);
+    const itinerary = scheduleItinerary({
+      request: { days: 2, destination: "T", accommodation: { name: "H", lat: 35.69, lng: 139.7 } },
+      assignments: [{ dayIndex: 1, placeIds: ["c"] }, { dayIndex: 2, placeIds: ["far"] }],
+      details,
+      legMinutes: leg,
+      dayTripDays: new Set([2]),
+    });
+    expect(itinerary.days[0]!.dayTrip).toBeUndefined();
+    expect(itinerary.days[1]!.dayTrip).toBe(true);
+  });
+});
+
+describe("summariseDays", () => {
+  const item = (o: Partial<ItineraryItem>): ItineraryItem => ({
+    itemId: "i", kind: "visit", name: "X", startTime: "09:00", durationMinutes: 60, ...o,
+  });
+  const req: TripRequest = { days: 1, destination: "T", accommodation: { name: "H" } };
+
+  it("names each day's visits and flags the pinned must-visit", () => {
+    const itinerary: Itinerary = {
+      request: req,
+      days: [{ dayIndex: 1, items: [item({ name: "Museum" }), item({ name: "The Desert", pinned: true })] }],
+    };
+    expect(summariseDays(itinerary).days[0]!.places).toEqual(["Museum", "The Desert (must-visit)"]);
+  });
+
+  it("reports an unwrapped end (and minutes) for a day that runs past midnight", () => {
+    const itinerary: Itinerary = {
+      request: req,
+      days: [{ dayIndex: 1, items: [item({ startTime: "23:30", durationMinutes: 60 })] }],
+    };
+    const day = summariseDays(itinerary).days[0]!;
+    expect(day.endsAt).toBe("24:30");
+    expect(day.endsAtMinutes).toBe(1470);
+  });
+
+  it("surfaces the day-trip flag", () => {
+    const itinerary: Itinerary = {
+      request: req,
+      days: [{ dayIndex: 1, items: [item({})], dayTrip: true }],
+    };
+    expect(summariseDays(itinerary).days[0]!.dayTrip).toBe(true);
   });
 });
