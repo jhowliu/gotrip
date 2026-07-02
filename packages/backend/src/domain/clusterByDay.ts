@@ -214,3 +214,68 @@ export function clusterByCost(input: ClusterByCostInput): DayAssignment[] {
 
   return buckets.map((ids, d) => ({ dayIndex: d + 1, placeIds: ids }));
 }
+
+export interface CarveDayTripsInput {
+  /** All sightseeing ids (must-visits included, restaurants excluded). */
+  attractionIds: string[];
+  /** Far must-visit ids (subset of attractionIds) — each earns its own day. */
+  anchorIds: string[];
+  days: number;
+  /** Travel minutes between two places (real matrix). */
+  cost: (a: string, b: string) => number;
+  /** Travel minutes accommodation → a place. */
+  centerCost: (id: string) => number;
+}
+
+export interface CarveDayTripsResult {
+  assignments: DayAssignment[];
+  /** 1-based day indices that are day-trips (long commute expected). */
+  dayTripDays: number[];
+}
+
+/**
+ * Carve out day-trips. A far anchor (a must-visit hours from the accommodation) is
+ * invisible to the agent — it's auto-pinned by code — so the agent can't dedicate a
+ * day to it; code does. Each anchor gets its own day plus any companion that sits
+ * closer to the anchor than to the accommodation (a lookout by the desert, not back
+ * in town); the remaining "city" places are clustered into the other days by real
+ * travel. Returns null when there's no clean carve (no anchors, or too few days to
+ * keep at least one city day) — the caller then keeps the agent's own grouping.
+ */
+export function carveDayTrips(input: CarveDayTripsInput): CarveDayTripsResult | null {
+  const days = Math.max(1, Math.floor(input.days));
+  const anchors = [...new Set(input.anchorIds)].filter((id) => input.attractionIds.includes(id));
+  if (anchors.length === 0 || anchors.length >= days) return null; // keep ≥1 city day
+
+  const anchorSet = new Set(anchors);
+  const dayTripPlaces = new Map<string, string[]>(anchors.map((a) => [a, [a]] as [string, string[]]));
+  const cityIds: string[] = [];
+  for (const id of input.attractionIds) {
+    if (anchorSet.has(id)) continue;
+    let nearest: string | null = null;
+    let nearestCost = Number.POSITIVE_INFINITY;
+    for (const a of anchors) {
+      const c = input.cost(a, id);
+      if (c < nearestCost) {
+        nearestCost = c;
+        nearest = a;
+      }
+    }
+    // Belongs to the day-trip only if it's genuinely nearer the anchor than home.
+    if (nearest && nearestCost < input.centerCost(id)) dayTripPlaces.get(nearest)!.push(id);
+    else cityIds.push(id);
+  }
+
+  const cityDayCount = days - anchors.length;
+  const cityDays = clusterByCost({
+    ids: cityIds,
+    days: cityDayCount,
+    cost: input.cost,
+    centerCost: input.centerCost,
+  });
+  const assignments: DayAssignment[] = cityDays.map((d, i) => ({ dayIndex: i + 1, placeIds: d.placeIds }));
+  anchors.forEach((a, i) => {
+    assignments.push({ dayIndex: cityDayCount + i + 1, placeIds: dayTripPlaces.get(a)! });
+  });
+  return { assignments, dayTripDays: anchors.map((_, i) => cityDayCount + i + 1) };
+}

@@ -92,4 +92,39 @@ describe("planDays (agent-chosen day grouping)", () => {
     const out = await planDays.execute({ days: [{ day: 1, refs: ["nope"] }] }, state);
     expect(out.isError).toBe(true);
   });
+
+  it("carves a far must-visit onto its own day-trip day, exempt from day-end caps", async () => {
+    // FAR is ~56 km out (lng 0.5) → >60 min drive → a day-trip anchor, not a city stop.
+    const FAR = detail("FAR", 0, 0.5);
+    const req: TripRequest = {
+      days: 2,
+      destination: "T",
+      accommodation: { name: "H", lat: 0, lng: 0 },
+      mustVisit: [{ name: "FAR", placeId: "FAR" }],
+      pace: "relaxed",
+    };
+    const provider = createMockToolProvider([A, B, FAR]);
+    const spec = createColdStartSpec(req, provider, { details: new Map([["FAR", FAR]]) });
+    const state = spec.initialState as PlanningState;
+    for (const [ref, place] of [["r1", A], ["r2", B]] as const) {
+      state.refs.set(ref, place.placeId);
+      state.details.set(place.placeId, place);
+    }
+    const planDays = spec.tools.find((t) => t.name === "planDays")!;
+
+    // Agent groups only the two city stops; the far must-visit is invisible to it.
+    const out = await planDays.execute({ days: [{ day: 1, refs: ["r1"] }, { day: 2, refs: ["r2"] }] }, state);
+    const content = out.content as {
+      days: Array<{ day: number; dayTrip?: boolean; places: string[] }>;
+      hardViolations: Array<{ code: string; dayIndex?: number }>;
+    };
+
+    const tripDay = content.days.find((d) => d.dayTrip);
+    expect(tripDay).toBeDefined();
+    expect(tripDay!.places.some((p) => p.includes("FAR") && p.includes("must-visit"))).toBe(true);
+    // The day-trip's long commute is expected — it must not trip a day-end guard.
+    const tripViolations = content.hardViolations.filter((v) => v.dayIndex === tripDay!.day);
+    expect(tripViolations.map((v) => v.code)).not.toContain("DAY_TOO_TIGHT");
+    expect(tripViolations.map((v) => v.code)).not.toContain("DAY_TOO_LIGHT");
+  });
 });

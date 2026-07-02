@@ -23,7 +23,7 @@ import type {
   ValidationResult,
   Violation,
 } from "../../domain/itinerary";
-import { clusterByCost, haversineMeters } from "../../domain/clusterByDay";
+import { carveDayTrips, clusterByCost, haversineMeters } from "../../domain/clusterByDay";
 import { selectPlaces } from "../../domain/selectPlaces";
 import { paceDayEndCap, perDayVisitTarget, toMinutes } from "../../domain/timing";
 import { scheduleItinerary, summariseDays } from "../../domain/schedule";
@@ -48,19 +48,29 @@ export interface PlanningState {
 /** Coarse geometric estimate — used for day-balancing and as the matrix fallback. */
 const legMinutes = (a: GeoLocation, b: GeoLocation): number => estimateTravelMinutes(a, b, "transit");
 
+/** The accommodation as a GeoLocation, or null when it isn't geocoded. */
+function accommodationGeo(state: PlanningState): GeoLocation | null {
+  const acc = state.request.accommodation;
+  return typeof acc.lat === "number" && typeof acc.lng === "number"
+    ? { name: acc.name, lat: acc.lat, lng: acc.lng }
+    : null;
+}
+
 /** Accommodation (if geocoded) + the given places' coordinates, for a matrix. */
 function placePoints(state: PlanningState, placeIds: string[]): GeoLocation[] {
   const points: GeoLocation[] = [];
-  const acc = state.request.accommodation;
-  if (typeof acc.lat === "number" && typeof acc.lng === "number") {
-    points.push({ name: acc.name, lat: acc.lat, lng: acc.lng });
-  }
+  const center = accommodationGeo(state);
+  if (center) points.push(center);
   for (const id of placeIds) {
     const loc = state.details.get(id)?.location;
     if (loc) points.push(loc);
   }
   return points;
 }
+
+/** A far must-visit past this real driving time from the accommodation is treated
+ *  as a day-trip anchor: it gets its own day, exempt from the day-end / light-day caps. */
+const DAY_TRIP_MINUTES = 60;
 
 /**
  * Build a leg-cost function backed by the provider's real travel-time matrix
@@ -112,7 +122,9 @@ const DAY_LIGHT_SLACK_MINUTES = 180; // should run to within ~3h of the pace cap
 function dayTooLightViolations(itinerary: Itinerary, pace?: Pace): Violation[] {
   const floor = toMinutes(paceDayEndCap(pace)) - DAY_LIGHT_SLACK_MINUTES;
   return summariseDays(itinerary)
-    .days.filter((d) => d.visits > 0 && toMinutes(d.endsAt) < floor)
+    // Skip day-trips (a long commute makes on-site time short by design), and compare
+    // on absolute end minutes so a day that ran past midnight isn't mistaken for empty.
+    .days.filter((d) => !d.dayTrip && d.visits > 0 && d.endsAtMinutes < floor)
     .map((d) => ({
       code: "DAY_TOO_LIGHT",
       message: `day ${d.day} ends at ${d.endsAt} — too light. ADD more places to it (candidates you haven't used, or search that area) or MOVE one from a fuller day. Do not drop places to fix this.`,
@@ -152,6 +164,36 @@ function ensureMustVisitsPlaced(assignments: DayAssignment[], state: PlanningSta
     best.placeIds.push(id);
     placed.add(id);
   }
+}
+
+/** After day-trips are carved out, re-home the agent's restaurants onto the nearest
+ *  CITY day (a day-trip day gets a generic meal block near its anchor instead). */
+function mealsByNearestCityDay(
+  restaurants: PlaceDetail[],
+  assignments: DayAssignment[],
+  dayTripDays: ReadonlySet<number>,
+  details: Map<string, PlaceDetail>,
+  legFn: (a: GeoLocation, b: GeoLocation) => number,
+): Map<number, PlaceDetail[]> {
+  const cityDays = assignments.filter((a) => !dayTripDays.has(a.dayIndex));
+  const meals = new Map<number, PlaceDetail[]>();
+  if (cityDays.length === 0) return meals;
+  for (const r of restaurants) {
+    let bestDay = cityDays[0]!.dayIndex;
+    let bestCost = Number.POSITIVE_INFINITY;
+    for (const d of cityDays) {
+      const c = centroidOf(d.placeIds, details);
+      const cost = c ? legFn(r.location, c) : 0;
+      if (cost < bestCost) {
+        bestCost = cost;
+        bestDay = d.dayIndex;
+      }
+    }
+    const list = meals.get(bestDay);
+    if (list) list.push(r);
+    else meals.set(bestDay, [r]);
+  }
+  return meals;
 }
 
 /** Validate the best itinerary we have (with details for opening-hours checks). */
@@ -367,20 +409,64 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
         if (built.length === 0) {
           return { content: { error: "no valid places in your plan; use refs you've detailed" }, isError: true };
         }
-        const assignments: DayAssignment[] = built.map((b, i) => ({ dayIndex: i + 1, placeIds: b.attractions }));
-        const mealsByDay = new Map<number, PlaceDetail[]>();
+        let assignments: DayAssignment[] = built.map((b, i) => ({ dayIndex: i + 1, placeIds: b.attractions }));
+        let mealsByDay = new Map<number, PlaceDetail[]>();
         built.forEach((b, i) => {
           if (b.restaurants.length > 0) mealsByDay.set(i + 1, b.restaurants);
         });
         ensureMustVisitsPlaced(assignments, state);
+
+        // Real-travel leg costs over every attraction (+ accommodation) — one matrix
+        // call, reused for day-trip carving, ordering, and timing.
+        const legFn = await buildLegMinutes(provider, placePoints(state, assignments.flatMap((a) => a.placeIds)));
+        const loc = (id: string): GeoLocation | undefined => state.details.get(id)?.location;
+
+        // A far must-visit is invisible to the agent (auto-pinned), so code carves it
+        // onto its own day-trip day rather than let it wreck a city day's timing.
+        let dayTripDays: ReadonlySet<number> = new Set<number>();
+        const center = accommodationGeo(state);
+        if (center) {
+          const cost = (a: string, b: string): number => {
+            const la = loc(a);
+            const lb = loc(b);
+            return la && lb ? legFn(la, lb) : 0;
+          };
+          const centerCost = (id: string): number => {
+            const l = loc(id);
+            return l ? legFn(center, l) : 0;
+          };
+          const anchorIds = [...mustVisitIds(state.request)].filter(
+            (id) => state.details.has(id) && centerCost(id) > DAY_TRIP_MINUTES,
+          );
+          const carved = carveDayTrips({
+            attractionIds: assignments.flatMap((a) => a.placeIds),
+            anchorIds,
+            days: state.request.days,
+            cost,
+            centerCost,
+          });
+          if (carved) {
+            assignments = carved.assignments;
+            dayTripDays = new Set(carved.dayTripDays);
+            mealsByDay = mealsByNearestCityDay(
+              built.flatMap((b) => b.restaurants),
+              assignments,
+              dayTripDays,
+              state.details,
+              legFn,
+            );
+          }
+        }
+
         state.assignments = assignments;
         const draft = scheduleItinerary({
           request: state.request,
           assignments,
           details: state.details,
-          legMinutes: await buildLegMinutes(provider, placePoints(state, assignments.flatMap((a) => a.placeIds))),
+          legMinutes: legFn,
           mustVisitIds: mustVisitIds(state.request),
           mealsByDay,
+          dayTripDays,
           options: { respectWindows: true },
         });
         state.draft = draft;
@@ -510,8 +596,10 @@ const INSTRUCTION = [
   "harbour/old-town area), and don't split a themed zone across days. Aim to FILL both days (roughly balanced).",
   "Put ~1 restaurant on each day, on the day that actually runs through a mealtime. Submit { days: [{ day, refs }] }.",
   "(You may call clusterByDay first for a rough distance-based suggestion, then improve the grouping.)",
-  "planDays returns each day's travel time + any violations. Fix by REGROUPING and calling planDays again —",
-  "prefer MOVING or ADDING places over dropping them:",
+  "planDays returns, per day, its places (must-visits are marked), travel time, end time, and any violations —",
+  "and flags any day-trip day. A day-trip day holds a far must-visit that code placed on its own day; its long",
+  "commute is expected, so do NOT try to fix its travel time or fill it — leave it as is. For the OTHER days,",
+  "fix violations by REGROUPING and calling planDays again — prefer MOVING or ADDING places over dropping them:",
   "CLOSED_HOURS → move that place to a day/slot where it's open (or drop it if it can't fit any day);",
   "DAY_TOO_TIGHT → move a place to the lighter day;",
   "DAY_TOO_LIGHT → the day is too empty: ADD more places to it (candidates you didn't use, or search that",
