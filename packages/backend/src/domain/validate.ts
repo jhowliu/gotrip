@@ -151,19 +151,6 @@ export function validate(
         });
       }
     }
-
-    // Soft: meals should land inside their window.
-    for (const item of day.items) {
-      if (item.kind === "meal" && item.mealWindow && !withinWindow(item.startTime, item.durationMinutes, item.mealWindow)) {
-        softWarnings.push({
-          code: "MEAL_OUT_OF_WINDOW",
-          message: `${item.name} at ${item.startTime} is outside ${item.mealWindow[0]}–${item.mealWindow[1]}`,
-          dayIndex: day.dayIndex,
-          itemId: item.itemId,
-          source: "constraint",
-        });
-      }
-    }
   }
 
   return { hardViolations, softWarnings };

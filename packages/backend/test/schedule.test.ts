@@ -99,6 +99,24 @@ describe("scheduleItinerary", () => {
     expect(withinWindow(naiveFar.startTime, naiveFar.durationMinutes, ["09:00", "10:30"])).toBe(false);
   });
 
+  it("schedules a late-opening venue (night market) last, not first", () => {
+    const details = new Map([
+      ["day", detail("day", 0, 0.01, "park", 60)], // all-day
+      ["market", detail("market", 0, 0.02, "market", 60, ["17:00", "23:00"])], // opens 17:00
+    ]);
+    const itinerary = scheduleItinerary({
+      request: { days: 1, destination: "T", accommodation: { name: "H", lat: 0, lng: 0 } },
+      assignments: [{ dayIndex: 1, placeIds: ["day", "market"] }],
+      details,
+      legMinutes: () => 10,
+    });
+    const visits = itinerary.days[0]!.items.filter((i) => i.kind === "visit");
+    expect(visits.map((i) => i.placeId)).toEqual(["day", "market"]); // daytime first, market last
+    expect(visits[0]!.startTime).toBe("09:00"); // day isn't dragged to the evening
+    const market = visits[1]!;
+    expect(withinWindow(market.startTime, market.durationMinutes, ["17:00", "23:00"])).toBe(true);
+  });
+
   it("orders visits by the injected travel cost, not straight-line distance", () => {
     const details = new Map([
       ["near", detail("near", 0, 0.01, "park", 30)],
@@ -165,6 +183,22 @@ describe("scheduleItinerary", () => {
     });
     expect(itinerary.days[0]!.dayTrip).toBeUndefined();
     expect(itinerary.days[1]!.dayTrip).toBe(true);
+  });
+
+  it("times the out-and-back commute on a day-trip day (but not on a plain day)", () => {
+    const details = new Map([["far", detail("far", 0, 0.5, "landmark", 60)]]);
+    const req: TripRequest = { days: 1, destination: "T", accommodation: { name: "H", lat: 0, lng: 0 } };
+    const args = { request: req, assignments: [{ dayIndex: 1, placeIds: ["far"] }], details, legMinutes: () => 120 };
+
+    const trip = scheduleItinerary({ ...args, dayTripDays: new Set([1]) });
+    const transits = trip.days[0]!.items.filter((i) => i.kind === "transit");
+    expect(transits).toHaveLength(2); // drive out + drive back
+    expect(transits.at(-1)!.name).toBe("Transit to H"); // return leg
+    expect(summariseDays(trip).days[0]!.travelMinutes).toBeGreaterThan(0);
+
+    // A plain single-stop day has no commute legs (unchanged behaviour).
+    const plain = scheduleItinerary(args);
+    expect(plain.days[0]!.items.filter((i) => i.kind === "transit")).toHaveLength(0);
   });
 });
 

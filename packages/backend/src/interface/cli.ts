@@ -18,7 +18,7 @@ import { formatItineraryJson, formatItineraryText } from "../application/formatt
 import { createMockToolProvider } from "../infrastructure/tools/mock/mockToolProvider";
 import { createScriptedColdStartModel } from "../infrastructure/llm/scriptedModelClient";
 import { createScriptedWarmModel } from "../infrastructure/llm/scriptedWarmModel";
-import { createOpenAIModelClient } from "../infrastructure/llm/openaiModelClient";
+import { createModelClient, hasLlmKey } from "../infrastructure/llm/modelClient";
 import { createFileSessionStore } from "../infrastructure/persistence/fileSessionStore";
 import { createFileTracer } from "../infrastructure/observability/fileTracer";
 import type { Tracer } from "../application/agent/trace";
@@ -89,7 +89,7 @@ async function main(): Promise<void> {
   };
 
   const argv = process.argv.slice(2);
-  const useOpenAI = Boolean(process.env.OPENAI_API_KEY);
+  const useOpenAI = hasLlmKey();
   const logPath = `logs/run-${Date.now()}.ndjson`;
   const tracer = createFileTracer(logPath, { console: true });
   console.log(`trace: ${logPath}`);
@@ -109,12 +109,11 @@ async function main(): Promise<void> {
 
   let model: ModelClient;
   if (useOpenAI) {
-    if (process.env.OPENAI_MODEL) spec.model = process.env.OPENAI_MODEL;
-    model = createOpenAIModelClient({ tracer });
-    console.log(`model: OpenAI (${spec.model})`);
+    model = createModelClient(tracer);
+    console.log(`model: LLM (${spec.model})`);
   } else {
     model = createScriptedColdStartModel(request);
-    console.log("model: scripted (no OPENAI_API_KEY set)");
+    console.log("model: scripted (no LLM key set)");
   }
 
   const result = await runAgent(spec, model, tracer);
@@ -153,7 +152,7 @@ async function runEditDemo(useOpenAI: boolean, tracer: Tracer, customInstruction
   // 1) Cold-start a base itinerary.
   const baseSpec = createColdStartSpec(request, provider);
   const baseModel: ModelClient = useOpenAI
-    ? createOpenAIModelClient({ tracer })
+    ? createModelClient(tracer)
     : createScriptedColdStartModel(request);
   const base = (await runAgent(baseSpec, baseModel, tracer)).state.itinerary;
   if (!base) {
@@ -183,10 +182,10 @@ async function runEditDemo(useOpenAI: boolean, tracer: Tracer, customInstruction
   let warmModel: ModelClient;
   if (useOpenAI) {
     instruction = customInstruction || `Move ${target.name} to the morning of day 1.`;
-    warmModel = createOpenAIModelClient({ tracer });
+    warmModel = createModelClient(tracer);
   } else {
     if (customInstruction) {
-      console.log('note: free-text edits need OPENAI_API_KEY; running the canned "move to morning" demo instead.');
+      console.log('note: free-text edits need an LLM key; running the canned "move to morning" demo instead.');
     }
     instruction = `Move ${target.name} to the morning of day 1.`;
     warmModel = createScriptedWarmModel([{ op: "move", itemId: target.itemId, toDay: 1, atTime: "09:00" }] as EditOp[]);

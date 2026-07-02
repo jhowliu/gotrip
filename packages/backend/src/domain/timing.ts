@@ -126,8 +126,8 @@ export interface MealSlot {
 }
 
 export const MEAL_SLOTS: readonly MealSlot[] = [
-  { label: "Lunch", window: ["11:30", "13:30"], preferredStart: "12:00", durationMinutes: 60 },
-  { label: "Dinner", window: ["18:00", "20:00"], preferredStart: "18:30", durationMinutes: 60 },
+  { label: "Lunch", window: ["11:00", "14:00"], preferredStart: "12:00", durationMinutes: 60 },
+  { label: "Dinner", window: ["17:30", "21:00"], preferredStart: "18:30", durationMinutes: 60 },
 ];
 
 /** Is [start, start+duration] fully inside [window.0, window.1]? */
