@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { scheduleItinerary } from "../src/domain/schedule";
+import { scheduleItinerary, summariseDays } from "../src/domain/schedule";
 import { withinWindow } from "../src/domain/timing";
-import type { GeoLocation, PlaceDetail, TripRequest } from "../src/domain/itinerary";
+import type { GeoLocation, Itinerary, ItineraryItem, PlaceDetail, TripRequest } from "../src/domain/itinerary";
 
 function detail(
   id: string,
@@ -99,6 +99,24 @@ describe("scheduleItinerary", () => {
     expect(withinWindow(naiveFar.startTime, naiveFar.durationMinutes, ["09:00", "10:30"])).toBe(false);
   });
 
+  it("schedules a late-opening venue (night market) last, not first", () => {
+    const details = new Map([
+      ["day", detail("day", 0, 0.01, "park", 60)], // all-day
+      ["market", detail("market", 0, 0.02, "market", 60, ["17:00", "23:00"])], // opens 17:00
+    ]);
+    const itinerary = scheduleItinerary({
+      request: { days: 1, destination: "T", accommodation: { name: "H", lat: 0, lng: 0 } },
+      assignments: [{ dayIndex: 1, placeIds: ["day", "market"] }],
+      details,
+      legMinutes: () => 10,
+    });
+    const visits = itinerary.days[0]!.items.filter((i) => i.kind === "visit");
+    expect(visits.map((i) => i.placeId)).toEqual(["day", "market"]); // daytime first, market last
+    expect(visits[0]!.startTime).toBe("09:00"); // day isn't dragged to the evening
+    const market = visits[1]!;
+    expect(withinWindow(market.startTime, market.durationMinutes, ["17:00", "23:00"])).toBe(true);
+  });
+
   it("orders visits by the injected travel cost, not straight-line distance", () => {
     const details = new Map([
       ["near", detail("near", 0, 0.01, "park", 30)],
@@ -149,5 +167,70 @@ describe("scheduleItinerary", () => {
     const genericLunch = generic.days[0]!.items.find((i) => i.kind === "meal")!;
     expect(genericLunch.name).toBe("Lunch");
     expect(genericLunch.placeId).toBeUndefined();
+  });
+
+  it("marks day-trip days from dayTripDays", () => {
+    const details = new Map([
+      ["c", detail("c", 35.69, 139.7, "park", 60)],
+      ["far", detail("far", 36.5, 140.5, "landmark", 60)],
+    ]);
+    const itinerary = scheduleItinerary({
+      request: { days: 2, destination: "T", accommodation: { name: "H", lat: 35.69, lng: 139.7 } },
+      assignments: [{ dayIndex: 1, placeIds: ["c"] }, { dayIndex: 2, placeIds: ["far"] }],
+      details,
+      legMinutes: leg,
+      dayTripDays: new Set([2]),
+    });
+    expect(itinerary.days[0]!.dayTrip).toBeUndefined();
+    expect(itinerary.days[1]!.dayTrip).toBe(true);
+  });
+
+  it("times the out-and-back commute on a day-trip day (but not on a plain day)", () => {
+    const details = new Map([["far", detail("far", 0, 0.5, "landmark", 60)]]);
+    const req: TripRequest = { days: 1, destination: "T", accommodation: { name: "H", lat: 0, lng: 0 } };
+    const args = { request: req, assignments: [{ dayIndex: 1, placeIds: ["far"] }], details, legMinutes: () => 120 };
+
+    const trip = scheduleItinerary({ ...args, dayTripDays: new Set([1]) });
+    const transits = trip.days[0]!.items.filter((i) => i.kind === "transit");
+    expect(transits).toHaveLength(2); // drive out + drive back
+    expect(transits.at(-1)!.name).toBe("Transit to H"); // return leg
+    expect(summariseDays(trip).days[0]!.travelMinutes).toBeGreaterThan(0);
+
+    // A plain single-stop day has no commute legs (unchanged behaviour).
+    const plain = scheduleItinerary(args);
+    expect(plain.days[0]!.items.filter((i) => i.kind === "transit")).toHaveLength(0);
+  });
+});
+
+describe("summariseDays", () => {
+  const item = (o: Partial<ItineraryItem>): ItineraryItem => ({
+    itemId: "i", kind: "visit", name: "X", startTime: "09:00", durationMinutes: 60, ...o,
+  });
+  const req: TripRequest = { days: 1, destination: "T", accommodation: { name: "H" } };
+
+  it("names each day's visits and flags the pinned must-visit", () => {
+    const itinerary: Itinerary = {
+      request: req,
+      days: [{ dayIndex: 1, items: [item({ name: "Museum" }), item({ name: "The Desert", pinned: true })] }],
+    };
+    expect(summariseDays(itinerary).days[0]!.places).toEqual(["Museum", "The Desert (must-visit)"]);
+  });
+
+  it("reports an unwrapped end (and minutes) for a day that runs past midnight", () => {
+    const itinerary: Itinerary = {
+      request: req,
+      days: [{ dayIndex: 1, items: [item({ startTime: "23:30", durationMinutes: 60 })] }],
+    };
+    const day = summariseDays(itinerary).days[0]!;
+    expect(day.endsAt).toBe("24:30");
+    expect(day.endsAtMinutes).toBe(1470);
+  });
+
+  it("surfaces the day-trip flag", () => {
+    const itinerary: Itinerary = {
+      request: req,
+      days: [{ dayIndex: 1, items: [item({})], dayTrip: true }],
+    };
+    expect(summariseDays(itinerary).days[0]!.dayTrip).toBe(true);
   });
 });

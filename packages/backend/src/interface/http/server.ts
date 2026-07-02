@@ -26,13 +26,12 @@ import { createFileSessionStore } from "../../infrastructure/persistence/fileSes
 import { createFileTracer } from "../../infrastructure/observability/fileTracer";
 import { createProvider } from "../../infrastructure/tools/createProvider";
 import { createScriptedColdStartModel } from "../../infrastructure/llm/scriptedModelClient";
-import { createOpenAIModelClient } from "../../infrastructure/llm/openaiModelClient";
+import { createModelClient, hasLlmKey } from "../../infrastructure/llm/modelClient";
 import { TAIPEI_ACCOMMODATION } from "../../infrastructure/tools/mock/fixtures";
 
 const legMinutes = (a: GeoLocation, b: GeoLocation): number => estimateTravelMinutes(a, b, "transit");
 const store = createFileSessionStore("data/sessions");
 const { provider, source: providerSource } = createProvider();
-const hasOpenAI = (): boolean => Boolean(process.env.OPENAI_API_KEY);
 
 const locationSchema = z.object({ name: z.string(), lat: z.number().optional(), lng: z.number().optional() });
 const tripRequestSchema = z
@@ -51,7 +50,7 @@ app.use("/api/*", cors());
 
 app.get("/", (c) => c.json({ app: "gotrip api", ui: "run the web app: npm run web (vite dev on :5173)" }));
 
-app.get("/api/config", (c) => c.json({ chatEnabled: hasOpenAI(), provider: providerSource }));
+app.get("/api/config", (c) => c.json({ chatEnabled: hasLlmKey(), provider: providerSource }));
 
 app.get("/api/places", async (c) => {
   const places = await provider.searchPlaces({ query: c.req.query("q") ?? "", center: TAIPEI_ACCOMMODATION });
@@ -90,7 +89,7 @@ app.post("/api/sessions/:id/plan", async (c) => {
   const tracer = createFileTracer(logPath, { console: true });
   console.log(`\n=== plan: ${request.destination}, ${request.days}d → ${logPath} ===`);
   const prepared = await prepareColdStart(request, provider);
-  const model: ModelClient = hasOpenAI() ? createOpenAIModelClient({ tracer }) : createScriptedColdStartModel(prepared.request);
+  const model: ModelClient = hasLlmKey() ? createModelClient(tracer) : createScriptedColdStartModel(prepared.request);
   const result = await runAgent(prepared.spec, model, tracer);
   const itinerary = result.state.itinerary;
   if (!itinerary) {
@@ -114,7 +113,7 @@ app.post("/api/sessions/:id/ops", async (c) => {
 });
 
 app.post("/api/sessions/:id/chat", async (c) => {
-  if (!hasOpenAI()) return c.json({ error: "chat needs OPENAI_API_KEY on the server" }, 400);
+  if (!hasLlmKey()) return c.json({ error: "chat needs an LLM key (OPENAI_API_KEY or OPENROUTER_API_KEY) on the server" }, 400);
   const id = c.req.param("id");
   const itinerary = await store.load(id);
   if (!itinerary) return c.json({ error: "not found" }, 404);
@@ -126,7 +125,7 @@ app.post("/api/sessions/:id/chat", async (c) => {
   const tracer = createFileTracer(logPath, { console: true });
   console.log(`\n=== chat: "${instruction}" → ${logPath} ===`);
   const spec = createWarmEditSpec(itinerary, instruction, provider, details);
-  const result = await runAgent(spec, createOpenAIModelClient({ tracer }), tracer);
+  const result = await runAgent(spec, createModelClient(tracer), tracer);
   if (result.state.finalized) await store.save(id, result.state.itinerary);
   return c.json({
     itinerary: result.state.itinerary,
@@ -139,5 +138,5 @@ app.post("/api/sessions/:id/chat", async (c) => {
 
 const port = Number(process.env.PORT ?? 8787);
 serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`gotrip web → http://localhost:${info.port}  (chat ${hasOpenAI() ? "enabled" : "disabled — set OPENAI_API_KEY"})`);
+  console.log(`gotrip web → http://localhost:${info.port}  (chat ${hasLlmKey() ? "enabled" : "disabled — set OPENAI_API_KEY or OPENROUTER_API_KEY"})`);
 });

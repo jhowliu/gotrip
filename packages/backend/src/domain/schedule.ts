@@ -25,8 +25,9 @@ import {
   MEAL_SLOTS,
   TRANSIT_BUFFER_MINUTES,
   addMinutes,
-  endTime,
+  dayEndMinutes,
   timeOfDayFromIso,
+  toClock,
   toMinutes,
   visitMinutes,
   withinWindow,
@@ -51,6 +52,9 @@ export interface ScheduleInput {
   mustVisitIds?: ReadonlySet<string>;
   /** Candidate restaurants per day (1-based) — placed into meal slots, not as visits. */
   mealsByDay?: ReadonlyMap<number, PlaceDetail[]>;
+  /** Day indices (1-based) built around a far anchor — a long commute is expected,
+   *  so the day-end cap / light-day check don't apply. */
+  dayTripDays?: ReadonlySet<number>;
   options?: ScheduleOptions;
 }
 
@@ -59,19 +63,28 @@ function accommodationPoint(request: TripRequest): GeoLocation | null {
   return typeof lat === "number" && typeof lng === "number" ? { name, lat, lng } : null;
 }
 
-/** Opens after this, or closes before it → the visit must be timed, so order it up front. */
-const ORDER_OPEN_LIMIT = "10:00";
-const ORDER_CLOSE_LIMIT = "16:00";
+/** Opens at/after this → an evening venue (night market), scheduled LAST. */
+const EVENING_OPEN_LIMIT = "16:00";
+/** Closes before this → a morning/early place that must be done FIRST. */
+const MORNING_CLOSE_LIMIT = "16:00";
+
+type WindowKind = "morning" | "evening" | "flexible";
 
 /**
- * A window only constrains ordering if it's genuinely restrictive (a morning-only
- * or early-closing place). All-day windows — the common case in real data — don't,
- * so those flow through shortest-path ordering instead of pinning the sequence.
+ * Where in the day a visit belongs, by its open window. A place that opens late
+ * (a night market) is anchored to the EVENING; one that closes early (a museum
+ * shutting at noon) to the MORNING; everything else is flexible and routed by
+ * proximity in between. This is by time-of-day, not "restricted → go first" — so a
+ * 17:00 night market lands last, instead of dragging the whole day to start at 17:00.
  */
-function constrainsOrder(window?: [string, string]): boolean {
-  if (!window) return false;
-  return toMinutes(window[0]) > toMinutes(ORDER_OPEN_LIMIT) || toMinutes(window[1]) < toMinutes(ORDER_CLOSE_LIMIT);
+function windowKind(window?: [string, string]): WindowKind {
+  if (!window) return "flexible";
+  if (toMinutes(window[0]) >= toMinutes(EVENING_OPEN_LIMIT)) return "evening";
+  if (toMinutes(window[1]) < toMinutes(MORNING_CLOSE_LIMIT)) return "morning";
+  return "flexible";
 }
+
+const windowLength = (w: [string, string]): number => toMinutes(w[1]) - toMinutes(w[0]);
 
 function orderPlaces(placeIds: string[], input: ScheduleInput, start: GeoLocation | null): PlaceDetail[] {
   const detailed = placeIds
@@ -86,14 +99,19 @@ function orderPlaces(placeIds: string[], input: ScheduleInput, start: GeoLocatio
     return orderByShortestPath(detailed, start, cost);
   }
 
-  // Time-restricted places first (earliest window first) so they land in their slot;
-  // everything else is routed by shortest path, continuing from the last fixed stop.
-  const constrained = detailed
-    .filter((d) => constrainsOrder(d.openWindow))
-    .sort((a, b) => toMinutes(a.openWindow![0]) - toMinutes(b.openWindow![0]));
-  const free = detailed.filter((d) => !constrainsOrder(d.openWindow));
-  const anchor = constrained.length > 0 ? constrained[constrained.length - 1]!.location : start;
-  return [...constrained, ...orderByShortestPath(free, anchor, cost)];
+  // Anchor time-restricted places to their part of the day; route the flexible ones
+  // by shortest path in between. Tie-break by tightness (shorter window first) so the
+  // most-constrained place wins its slot.
+  const kindOf = (d: PlaceDetail): WindowKind => windowKind(d.openWindow);
+  const morning = detailed
+    .filter((d) => kindOf(d) === "morning")
+    .sort((a, b) => toMinutes(a.openWindow![1]) - toMinutes(b.openWindow![1]) || windowLength(a.openWindow!) - windowLength(b.openWindow!));
+  const evening = detailed
+    .filter((d) => kindOf(d) === "evening")
+    .sort((a, b) => toMinutes(a.openWindow![0]) - toMinutes(b.openWindow![0]) || windowLength(a.openWindow!) - windowLength(b.openWindow!));
+  const flexible = detailed.filter((d) => kindOf(d) === "flexible");
+  const afterMorning = morning.length > 0 ? morning[morning.length - 1]!.location : start;
+  return [...morning, ...orderByShortestPath(flexible, afterMorning, cost), ...evening];
 }
 
 /** Insert any meal whose preferred start has been reached and is still in-window. */
@@ -188,12 +206,17 @@ export function layoutDay(
   legMinutes: (a: GeoLocation, b: GeoLocation) => number,
   respectWindows = true,
   mealCandidates: PlaceDetail[] = [],
+  /** When set (day-trip days), schedule the accommodation→first and last→accommodation
+   *  legs so the long commute is timed, not invisible. */
+  commuteFrom: GeoLocation | null = null,
 ): ItineraryItem[] {
   const items: ItineraryItem[] = [];
   const pending = [...MEAL_SLOTS];
   const meals = [...mealCandidates]; // mutated as candidates are consumed
   let cursor = dayStart;
-  let prev: LayoutVisit | null = null;
+  // Seed `prev` with the accommodation on a day-trip day so the first leg (the long
+  // drive out) is scheduled just like any inter-stop leg.
+  let prev: { location: GeoLocation } | null = commuteFrom ? { location: commuteFrom } : null;
   let seq = 0;
 
   for (const v of ordered) {
@@ -232,6 +255,21 @@ export function layoutDay(
     prev = v;
   }
 
+  // Return leg home (day-trip days) — the drive back is part of the day.
+  if (commuteFrom && ordered.length > 0 && prev) {
+    const dur = legMinutes(prev.location, commuteFrom) + TRANSIT_BUFFER_MINUTES;
+    seq += 1;
+    items.push({
+      itemId: `d${dayIndex}-t${seq}`,
+      kind: "transit",
+      name: `Transit to ${commuteFrom.name}`,
+      startTime: cursor,
+      durationMinutes: dur,
+      mode: "transit",
+    });
+    cursor = addMinutes(cursor, dur);
+  }
+
   placeDueMeals(items, pending, cursor, dayIndex, meals);
   items.sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
   return items;
@@ -241,6 +279,7 @@ function scheduleDay(assignment: DayAssignment, input: ScheduleInput, start: Geo
   const ordered = orderPlaces(assignment.placeIds, input, start).map((p) =>
     toLayoutVisit(p, input.mustVisitIds),
   );
+  const dayTrip = input.dayTripDays?.has(assignment.dayIndex) ?? false;
   const items = layoutDay(
     assignment.dayIndex,
     ordered,
@@ -248,8 +287,9 @@ function scheduleDay(assignment: DayAssignment, input: ScheduleInput, start: Geo
     input.legMinutes,
     input.options?.respectWindows ?? true,
     input.mealsByDay?.get(assignment.dayIndex) ?? [],
+    dayTrip ? start : null, // time the commute out-and-back on a day-trip day
   );
-  return { dayIndex: assignment.dayIndex, items };
+  return { dayIndex: assignment.dayIndex, items, ...(dayTrip ? { dayTrip: true } : {}) };
 }
 
 export function scheduleItinerary(input: ScheduleInput): Itinerary {
@@ -263,25 +303,40 @@ export function scheduleItinerary(input: ScheduleInput): Itinerary {
 }
 
 /** Per-day travel time is a legibility/quality signal — a lopsided plan (one heavy
- *  day, one light) or an over-long day shows up here for the agent to rebalance. */
+ *  day, one light) or an over-long day shows up here for the agent to rebalance.
+ *  `places` names the day's visits (must-visits flagged) so the agent can see WHAT
+ *  is on each day — e.g. a far pinned anchor that's blowing up the travel time. */
 export interface DaySummary {
   day: number;
   visits: number;
   travelMinutes: number;
+  /** Display end ("24:09" when the day runs past midnight — deliberately not wrapped). */
   endsAt: string;
+  /** Absolute end minutes (may exceed 1440) — what the day-end guards compare on. */
+  endsAtMinutes: number;
+  /** Visit names in order; a pinned must-visit is marked so the agent recognises it. */
+  places: string[];
+  /** Present when this is a day-trip day (long commute expected). */
+  dayTrip?: boolean;
 }
 
 export function summariseDays(itinerary: Itinerary): { totalTravelMinutes: number; days: DaySummary[] } {
-  const days = itinerary.days.map((d) => {
+  const days = itinerary.days.map((d): DaySummary => {
     const travelMinutes = d.items
       .filter((i) => i.kind === "transit")
       .reduce((s, i) => s + i.durationMinutes, 0);
-    const last = d.items[d.items.length - 1];
+    const endsAtMinutes = dayEndMinutes(d.items);
+    const places = d.items
+      .filter((i) => i.kind === "visit")
+      .map((i) => (i.pinned ? `${i.name} (must-visit)` : i.name));
     return {
       day: d.dayIndex,
-      visits: d.items.filter((i) => i.kind === "visit").length,
+      visits: places.length,
       travelMinutes,
-      endsAt: last ? endTime(last) : DAY_START,
+      endsAt: toClock(endsAtMinutes),
+      endsAtMinutes,
+      places,
+      ...(d.dayTrip ? { dayTrip: true } : {}),
     };
   });
   return { totalTravelMinutes: days.reduce((s, d) => s + d.travelMinutes, 0), days };

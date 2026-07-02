@@ -46,11 +46,13 @@ describe("planDays (agent-chosen day grouping)", () => {
       totalTravelMinutes: number;
       days: Array<{ day: number; visits: number; travelMinutes: number; endsAt: string }>;
       hardViolations: Array<{ code: string }>;
+      goal: { satisfied: boolean; findings: Array<{ dimension: string; gap: string }> };
     };
     expect(content.days).toHaveLength(2);
     expect(content.days.every((d) => typeof d.travelMinutes === "number" && /^\d{2}:\d{2}$/.test(d.endsAt))).toBe(true);
-    // Tiny fixture ends early → only DAY_TOO_LIGHT is expected, nothing unexpected (CLOSED_HOURS etc.).
-    expect(content.hardViolations.every((v) => v.code === "DAY_TOO_LIGHT")).toBe(true);
+    // Tiny fixture is feasible (no hard violations); ending early is now a GOAL signal, not a violation.
+    expect(content.hardViolations).toHaveLength(0);
+    expect(content.goal.findings.some((f) => f.dimension === "FULLNESS")).toBe(true);
     expect(state.draft).not.toBeNull();
     expect(state.draft!.days).toHaveLength(2);
   });
@@ -79,17 +81,58 @@ describe("planDays (agent-chosen day grouping)", () => {
     expect(state.details.has("R")).toBe(true); // planDays resolved it on demand
   });
 
-  it("flags a day that ends far too early as DAY_TOO_LIGHT", async () => {
+  it("flags an under-used day via the goal layer (FULLNESS), without blocking finalize", async () => {
     const { planDays, state } = setup();
     const out = await planDays.execute({ days: [{ day: 1, refs: ["r1", "r2"] }, { day: 2, refs: ["r3", "r4"] }] }, state);
-    const content = out.content as { hardViolations: Array<{ code: string }> };
-    expect(out.isError).toBe(true);
-    expect(content.hardViolations.some((v) => v.code === "DAY_TOO_LIGHT")).toBe(true);
+    const content = out.content as {
+      hardViolations: Array<{ code: string }>;
+      goal: { findings: Array<{ dimension: string; dayIndex?: number }> };
+    };
+    // Under-use is a quality signal now — it must NOT be a hard violation (finalize stays open).
+    expect(out.isError).toBe(false);
+    expect(content.hardViolations).toHaveLength(0);
+    expect(content.goal.findings.some((f) => f.dimension === "FULLNESS")).toBe(true);
   });
 
   it("rejects a plan with no usable refs", async () => {
     const { planDays, state } = setup();
     const out = await planDays.execute({ days: [{ day: 1, refs: ["nope"] }] }, state);
     expect(out.isError).toBe(true);
+  });
+
+  it("carves a far must-visit onto its own day-trip day, exempt from day-end caps", async () => {
+    // FAR is ~56 km out (lng 0.5) → >60 min drive → a day-trip anchor, not a city stop.
+    const FAR = detail("FAR", 0, 0.5);
+    const req: TripRequest = {
+      days: 2,
+      destination: "T",
+      accommodation: { name: "H", lat: 0, lng: 0 },
+      mustVisit: [{ name: "FAR", placeId: "FAR" }],
+      pace: "relaxed",
+    };
+    const provider = createMockToolProvider([A, B, FAR]);
+    const spec = createColdStartSpec(req, provider, { details: new Map([["FAR", FAR]]) });
+    const state = spec.initialState as PlanningState;
+    for (const [ref, place] of [["r1", A], ["r2", B]] as const) {
+      state.refs.set(ref, place.placeId);
+      state.details.set(place.placeId, place);
+    }
+    const planDays = spec.tools.find((t) => t.name === "planDays")!;
+
+    // Agent groups only the two city stops; the far must-visit is invisible to it.
+    const out = await planDays.execute({ days: [{ day: 1, refs: ["r1"] }, { day: 2, refs: ["r2"] }] }, state);
+    const content = out.content as {
+      days: Array<{ day: number; dayTrip?: boolean; places: string[]; travelMinutes: number }>;
+      hardViolations: Array<{ code: string; dayIndex?: number }>;
+    };
+
+    const tripDay = content.days.find((d) => d.dayTrip);
+    expect(tripDay).toBeDefined();
+    expect(tripDay!.places.some((p) => p.includes("FAR") && p.includes("must-visit"))).toBe(true);
+    expect(tripDay!.travelMinutes).toBeGreaterThan(0); // out-and-back commute is timed
+    // The day-trip's long commute is expected — it must not trip a day-end guard.
+    const tripViolations = content.hardViolations.filter((v) => v.dayIndex === tripDay!.day);
+    expect(tripViolations.map((v) => v.code)).not.toContain("DAY_TOO_TIGHT");
+    expect(tripViolations.map((v) => v.code)).not.toContain("DAY_TOO_LIGHT");
   });
 });

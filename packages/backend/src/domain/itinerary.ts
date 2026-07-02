@@ -133,6 +133,9 @@ export interface ItineraryItem {
 export interface ItineraryDay {
   dayIndex: number; // 1-based
   items: ItineraryItem[]; // ordered by startTime
+  /** A day built around a far anchor (a day-trip): the long commute is expected,
+   *  so the day-end cap and light-day check don't apply to it. */
+  dayTrip?: boolean;
 }
 
 export interface Itinerary {

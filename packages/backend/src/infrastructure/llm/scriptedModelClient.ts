@@ -1,24 +1,22 @@
 /**
  * Scripted ModelClient — a deterministic stand-in for the LLM. Drives the
- * cold-start path and, crucially, *self-corrects*: when finalize reports hard
- * violations it re-plans (rebalance days for DAY_TOO_TIGHT, respect windows for
- * CLOSED_HOURS) and retries once. Lets the whole self-correction loop be tested
- * without an API. The real model (OpenAIModelClient) does this dynamically.
+ * cold-start path through the same tools the real agent uses (searchPlaces →
+ * getPlaceDetails → planDays → finalizeItinerary) and, crucially, *self-corrects*:
+ * when planDays reports a blocking violation it drops the priciest non-must-visit
+ * and re-plans, until the plan is feasible or nothing more can be dropped (then it
+ * exits gracefully). Lets the whole loop be tested without an API. The real model
+ * (OpenAIModelClient) does this dynamically and with far richer regrouping.
  */
 
 import type { HistoryItem, ModelClient, ModelRequest, ModelToolCall, ModelTurn } from "../../application/ports/ModelClient";
-import type { Place, TripRequest } from "../../domain/itinerary";
+import type { TripRequest } from "../../domain/itinerary";
 
-type Phase =
-  | "search"
-  | "details"
-  | "cluster"
-  | "assemble"
-  | "finalize"
-  | "check"
-  | "replan-assemble"
-  | "replan-finalize"
-  | "done";
+type Phase = "search" | "details" | "plan" | "await" | "done";
+
+/** DAY_TOO_LIGHT never blocks finalize, so it doesn't warrant dropping a place. */
+const NON_BLOCKING = new Set(["DAY_TOO_LIGHT"]);
+/** Safety net on recovery attempts (termination also comes from running out of drops). */
+const MAX_DROPS = 8;
 
 function callNames(history: HistoryItem[]): Map<string, string> {
   const names = new Map<string, string>();
@@ -44,23 +42,43 @@ function lastToolResultContent(history: HistoryItem[]): unknown {
   return null;
 }
 
-function lastSearchRefs(history: HistoryItem[]): string[] {
+/** Every result of a given tool, newest first, parsed. */
+function toolResults(history: HistoryItem[], toolName: string): unknown[] {
   const names = callNames(history);
+  const out: unknown[] = [];
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const entry = history[i];
-    if (entry?.role !== "tool_result") continue;
-    if (names.get(entry.callId) !== "searchPlaces") continue;
+    if (entry?.role !== "tool_result" || names.get(entry.callId) !== toolName) continue;
     try {
-      const data: unknown = JSON.parse(entry.content);
-      if (Array.isArray(data)) {
-        return (data as { ref?: string }[]).map((p) => p.ref).filter((r): r is string => typeof r === "string");
-      }
+      out.push(JSON.parse(entry.content));
     } catch {
       /* ignore */
     }
-    return [];
   }
-  return [];
+  return out;
+}
+
+/** Candidate refs the first searchPlaces surfaced, with their names. */
+function searchedRefs(history: HistoryItem[]): { ref: string; name: string }[] {
+  const results = toolResults(history, "searchPlaces");
+  const first = results[results.length - 1]; // oldest search = the initial wide net
+  if (!Array.isArray(first)) return [];
+  return (first as { ref?: string; name?: string }[])
+    .filter((p): p is { ref: string; name: string } => typeof p.ref === "string" && typeof p.name === "string")
+    .map((p) => ({ ref: p.ref, name: p.name }));
+}
+
+/** ref → ticketPrice, from getPlaceDetails results (drop the priciest first). */
+function refCosts(history: HistoryItem[]): Map<string, number> {
+  const costs = new Map<string, number>();
+  for (const r of toolResults(history, "getPlaceDetails")) {
+    if (r && typeof r === "object" && "ref" in r) {
+      const ref = String((r as { ref: unknown }).ref);
+      const price = Number((r as { ticketPrice?: unknown }).ticketPrice ?? 0);
+      costs.set(ref, Number.isFinite(price) ? price : 0);
+    }
+  }
+  return costs;
 }
 
 function violationCodes(content: unknown): string[] {
@@ -75,24 +93,42 @@ function violationCodes(content: unknown): string[] {
   return [];
 }
 
+/** Split refs round-robin across the requested days; drop empty days. */
+function buildDays(refs: string[], days: number): { day: number; refs: string[] }[] {
+  const n = Math.max(1, Math.floor(days));
+  const out = Array.from({ length: n }, (_, i) => ({ day: i + 1, refs: [] as string[] }));
+  refs.forEach((ref, i) => out[i % n]!.refs.push(ref));
+  return out.filter((d) => d.refs.length > 0);
+}
+
 export function createScriptedColdStartModel(request: TripRequest): ModelClient {
   let callCounter = 0;
   const nextId = (): string => `call_${(callCounter += 1)}`;
   const call = (name: string, input: unknown): ModelToolCall => ({ id: nextId(), name, input });
 
+  const mustVisitNames = new Set((request.mustVisit ?? []).map((m) => m.name));
+  const dropped = new Set<string>();
   let phase: Phase = "search";
-  let retried = false;
 
   return {
     async next(req: ModelRequest): Promise<ModelTurn> {
+      // Emit planDays for the current (un-dropped) candidate set.
+      const planTurn = (): ModelTurn => {
+        phase = "await";
+        const refs = searchedRefs(req.history)
+          .filter((p) => !dropped.has(p.ref))
+          .map((p) => p.ref);
+        return { kind: "tool_use", calls: [call("planDays", { days: buildDays(refs, request.days) })] };
+      };
+
       switch (phase) {
         case "search":
           phase = "details";
           return { kind: "tool_use", calls: [call("searchPlaces", { query: "top attractions", type: "attraction" })] };
 
         case "details": {
-          phase = "cluster";
-          const searched = lastSearchRefs(req.history);
+          phase = "plan";
+          const searched = searchedRefs(req.history).map((p) => p.ref);
           // must-visits aren't from search (no ref) — pass their id; the tool tolerates it.
           const mustVisit = (request.mustVisit ?? [])
             .map((m) => m.placeId)
@@ -101,47 +137,28 @@ export function createScriptedColdStartModel(request: TripRequest): ModelClient 
           return { kind: "tool_use", calls: refs.map((ref) => call("getPlaceDetails", { ref })) };
         }
 
-        case "cluster":
-          phase = "assemble";
-          return { kind: "tool_use", calls: [call("clusterByDay", {})] };
+        case "plan":
+          return planTurn();
 
-        case "assemble":
-          phase = "finalize";
-          // Deliberately naive first pass (scheduler defaults to window-aware) so
-          // the adversarial fixture trips CLOSED_HOURS and the loop is exercised.
-          return { kind: "tool_use", calls: [call("assembleItinerary", { respectWindows: false })] };
-
-        case "finalize":
-          phase = "check";
-          return { kind: "tool_use", calls: [call("finalizeItinerary", {})] };
-
-        case "check": {
-          // Reached only if the previous finalize failed (success ends the loop).
-          if (retried) {
-            return { kind: "message", text: "Could not satisfy all hard constraints within budget." };
-          }
-          retried = true;
+        case "await": {
           const codes = violationCodes(lastToolResultContent(req.history));
-          if (codes.includes("BUDGET_EXCEEDED")) {
-            phase = "replan-assemble";
-            return { kind: "tool_use", calls: [call("trimToBudget", {})] };
+          const blocking = codes.filter((c) => !NON_BLOCKING.has(c));
+          if (blocking.length === 0) {
+            phase = "done";
+            return { kind: "tool_use", calls: [call("finalizeItinerary", {})] };
           }
-          if (codes.includes("DAY_TOO_TIGHT") || codes.includes("FLIGHT_BUFFER")) {
-            phase = "replan-assemble";
-            return { kind: "tool_use", calls: [call("rebalanceDays", {})] };
+          // Recover: drop the priciest droppable (non-must-visit) place and re-plan.
+          const costs = refCosts(req.history);
+          const candidate = searchedRefs(req.history)
+            .filter((p) => !dropped.has(p.ref) && !mustVisitNames.has(p.name))
+            .sort((a, b) => (costs.get(b.ref) ?? 0) - (costs.get(a.ref) ?? 0))[0];
+          if (!candidate || dropped.size >= MAX_DROPS) {
+            phase = "done";
+            return { kind: "message", text: "Could not satisfy all hard constraints (e.g. flight buffer) for this trip." };
           }
-          // CLOSED_HOURS / ARRIVAL etc.: re-assemble honouring windows, then finalize.
-          phase = "replan-finalize";
-          return { kind: "tool_use", calls: [call("assembleItinerary", { respectWindows: true })] };
+          dropped.add(candidate.ref);
+          return planTurn();
         }
-
-        case "replan-assemble":
-          phase = "replan-finalize";
-          return { kind: "tool_use", calls: [call("assembleItinerary", { respectWindows: true })] };
-
-        case "replan-finalize":
-          phase = "check";
-          return { kind: "tool_use", calls: [call("finalizeItinerary", {})] };
 
         default:
           return { kind: "message", text: "done" };

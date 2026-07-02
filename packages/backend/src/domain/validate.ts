@@ -15,9 +15,11 @@ import {
   AIRPORT_BUFFER_MINUTES,
   ARRIVAL_TRANSFER_MINUTES,
   addMinutes,
+  dayEndMinutes,
   endTime,
   paceDayEndCap,
   timeOfDayFromIso,
+  toClock,
   toMinutes,
   withinWindow,
 } from "./timing";
@@ -95,14 +97,16 @@ export function validate(
   if (request.departure) {
     const mustLeaveBy = addMinutes(timeOfDayFromIso(request.departure.datetime), -AIRPORT_BUFFER_MINUTES);
     const lastDay = days.at(-1);
-    const last = lastDay && lastDay.items.length > 0 ? lastDay.items[lastDay.items.length - 1] : undefined;
-    if (lastDay && last && toMinutes(endTime(last)) > toMinutes(mustLeaveBy)) {
-      hardViolations.push({
-        code: "FLIGHT_BUFFER",
-        message: `last day ends at ${endTime(last)} but you must leave for the airport by ${mustLeaveBy}`,
-        dayIndex: lastDay.dayIndex,
-        source: "constraint",
-      });
+    if (lastDay && lastDay.items.length > 0) {
+      const endMin = dayEndMinutes(lastDay.items);
+      if (endMin > toMinutes(mustLeaveBy)) {
+        hardViolations.push({
+          code: "FLIGHT_BUFFER",
+          message: `last day ends at ${toClock(endMin)} but you must leave for the airport by ${mustLeaveBy}`,
+          dayIndex: lastDay.dayIndex,
+          source: "constraint",
+        });
+      }
     }
   }
 
@@ -134,26 +138,15 @@ export function validate(
       }
     }
 
-    // Hard: the day must not run past the pace cap.
-    const last = day.items[day.items.length - 1]!;
-    const dayEnd = endTime(last);
-    if (toMinutes(dayEnd) > toMinutes(dayCap)) {
-      hardViolations.push({
-        code: "DAY_TOO_TIGHT",
-        message: `day ${day.dayIndex} ends at ${dayEnd}, past the ${dayCap} cap for "${request.pace ?? "default"}" pace`,
-        dayIndex: day.dayIndex,
-        source: "constraint",
-      });
-    }
-
-    // Soft: meals should land inside their window.
-    for (const item of day.items) {
-      if (item.kind === "meal" && item.mealWindow && !withinWindow(item.startTime, item.durationMinutes, item.mealWindow)) {
-        softWarnings.push({
-          code: "MEAL_OUT_OF_WINDOW",
-          message: `${item.name} at ${item.startTime} is outside ${item.mealWindow[0]}–${item.mealWindow[1]}`,
+    // Hard: the day must not run past the pace cap — except a day-trip day, whose
+    // long commute is expected (the anchor is far by definition).
+    if (!day.dayTrip) {
+      const endMin = dayEndMinutes(day.items);
+      if (endMin > toMinutes(dayCap)) {
+        hardViolations.push({
+          code: "DAY_TOO_TIGHT",
+          message: `day ${day.dayIndex} ends at ${toClock(endMin)}, past the ${dayCap} cap for "${request.pace ?? "default"}" pace`,
           dayIndex: day.dayIndex,
-          itemId: item.itemId,
           source: "constraint",
         });
       }

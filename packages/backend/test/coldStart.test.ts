@@ -58,7 +58,7 @@ describe("cold-start tracer bullet (mock + scripted model)", () => {
     const request = tokyoRequest();
     const provider = createMockToolProvider(TOKYO_PLACES);
     const spec = createColdStartSpec(request, provider);
-    // too few turns to reach finalize (needs search→details→cluster→assemble→finalize)
+    // too few turns to reach finalize (needs search→details→planDays→finalize)
     spec.constraints.maxIterations = 2;
 
     const result = await runAgent(spec, createScriptedColdStartModel(request));

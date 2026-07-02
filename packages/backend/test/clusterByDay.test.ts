@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clusterByCost, clusterByDay, haversineMeters } from "../src/domain/clusterByDay";
+import { carveDayTrips, clusterByCost, clusterByDay, haversineMeters } from "../src/domain/clusterByDay";
 
 describe("clusterByCost", () => {
   it("keeps a far-by-road place (e.g. an island) off the near cluster", () => {
@@ -23,6 +23,52 @@ describe("clusterByCost", () => {
       pinned: [{ id: "a", dayIndex: 2 }],
     });
     expect(result.find((d) => d.dayIndex === 2)!.placeIds).toContain("a");
+  });
+});
+
+describe("carveDayTrips", () => {
+  // A city cluster (c1,c2,c3) near the accommodation, plus a far anchor and a
+  // companion right next to it (both hours away, close to each other).
+  const near = new Set(["c1", "c2", "c3", "far", "companion"]);
+  const cost = (a: string, b: string): number => {
+    const cityPair = near.has(a) && near.has(b) && a !== "far" && a !== "companion" && b !== "far" && b !== "companion";
+    if (cityPair) return 8;
+    if ([a, b].sort().join("-") === "companion-far") return 5; // companion sits by the anchor
+    return 130; // city ↔ anchor area
+  };
+  const centerCost = (id: string): number => (id === "far" || id === "companion" ? 130 : 10);
+
+  it("gives a far anchor its own day-trip day and clusters the city into the rest", () => {
+    const result = carveDayTrips({
+      attractionIds: ["c1", "c2", "c3", "far", "companion"],
+      anchorIds: ["far"],
+      days: 2,
+      cost,
+      centerCost,
+    });
+    expect(result).not.toBeNull();
+    const { assignments, dayTripDays } = result!;
+    expect(assignments).toHaveLength(2);
+    expect(dayTripDays).toEqual([2]); // city day first, then the anchor day
+
+    const tripDay = assignments.find((a) => dayTripDays.includes(a.dayIndex))!;
+    expect(tripDay.placeIds).toContain("far");
+    expect(tripDay.placeIds).toContain("companion"); // nearer the anchor than home → same day
+    const cityDay = assignments.find((a) => !dayTripDays.includes(a.dayIndex))!;
+    expect(cityDay.placeIds.sort()).toEqual(["c1", "c2", "c3"]);
+  });
+
+  it("returns null when there's no far anchor (nothing to carve)", () => {
+    expect(
+      carveDayTrips({ attractionIds: ["c1", "c2"], anchorIds: [], days: 2, cost, centerCost }),
+    ).toBeNull();
+  });
+
+  it("returns null when carving would leave no city day", () => {
+    // 1 day, 1 anchor → dedicating it a day leaves zero city days.
+    expect(
+      carveDayTrips({ attractionIds: ["far", "c1"], anchorIds: ["far"], days: 1, cost, centerCost }),
+    ).toBeNull();
   });
 });
 

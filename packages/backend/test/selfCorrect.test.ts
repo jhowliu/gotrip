@@ -7,8 +7,8 @@ import { createMockToolProvider } from "../src/infrastructure/tools/mock/mockToo
 import { createScriptedColdStartModel } from "../src/infrastructure/llm/scriptedModelClient";
 import { ADVERSARIAL_ACCOMMODATION, ADVERSARIAL_NARROW_WINDOW } from "../src/infrastructure/tools/mock/fixtures";
 
-describe("self-correction (adversarial fixtures, mock + scripted)", () => {
-  it("detects CLOSED_HOURS and re-plans to a valid itinerary", async () => {
+describe("window-aware planning (adversarial fixtures, mock + scripted)", () => {
+  it("schedules a narrow-window must-visit inside its open window and finalizes", async () => {
     const request: TripRequest = {
       days: 1,
       destination: "Tokyo",
@@ -23,10 +23,11 @@ describe("self-correction (adversarial fixtures, mock + scripted)", () => {
       createScriptedColdStartModel(request),
     );
 
-    // The first plan trips CLOSED_HOURS; the agent re-plans and converges.
+    // planDays orders the time-restricted place first, so it lands in its window
+    // on the first pass (no CLOSED_HOURS to recover from — recovery is covered by
+    // the over-budget trim test).
     expect(result.status).toBe("ok");
     expect(result.validation.hardViolations).toHaveLength(0);
-    expect(result.iterations).toBeGreaterThan(5); // needed at least one re-plan pass
 
     const itinerary = result.state.itinerary!;
     const sunrise = itinerary.days.flatMap((d) => d.items).find((i) => i.placeId === "a_sunrise")!;

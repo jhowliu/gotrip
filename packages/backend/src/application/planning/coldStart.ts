@@ -15,21 +15,18 @@ import type {
   DayAssignment,
   GeoLocation,
   Itinerary,
-  Pace,
   Place,
   PlaceDetail,
   PlaceType,
   TripRequest,
   ValidationResult,
-  Violation,
 } from "../../domain/itinerary";
-import { clusterByCost, haversineMeters } from "../../domain/clusterByDay";
+import { carveDayTrips, clusterByCost, haversineMeters } from "../../domain/clusterByDay";
 import { selectPlaces } from "../../domain/selectPlaces";
-import { paceDayEndCap, perDayVisitTarget, toMinutes } from "../../domain/timing";
+import { perDayVisitTarget } from "../../domain/timing";
 import { scheduleItinerary, summariseDays } from "../../domain/schedule";
-import { rebalanceForBudget } from "../../domain/rebalance";
-import { resolveBudget, trimToBudget } from "../../domain/budget";
 import { validate } from "../../domain/validate";
+import { evaluateGoal } from "../../domain/evaluateGoal";
 import { estimateCost } from "../../domain/estimateCost";
 import { estimateTravelMinutes } from "../../domain/travel";
 import { baseModel, escalationModel } from "./models";
@@ -40,6 +37,9 @@ export interface PlanningState {
   /** Model-facing handle → real placeId. The agent never sees raw place ids. */
   refs: Map<string, string>;
   details: Map<string, PlaceDetail>;
+  /** `near=` areas whose search returned nothing new — a day-trip anchor here has
+   *  no reachable companions, so the goal layer stops demanding one (see evaluateGoal). */
+  nearExhausted: Set<string>;
   assignments: DayAssignment[] | null;
   draft: Itinerary | null;
   itinerary: Itinerary | null;
@@ -48,19 +48,29 @@ export interface PlanningState {
 /** Coarse geometric estimate — used for day-balancing and as the matrix fallback. */
 const legMinutes = (a: GeoLocation, b: GeoLocation): number => estimateTravelMinutes(a, b, "transit");
 
+/** The accommodation as a GeoLocation, or null when it isn't geocoded. */
+function accommodationGeo(state: PlanningState): GeoLocation | null {
+  const acc = state.request.accommodation;
+  return typeof acc.lat === "number" && typeof acc.lng === "number"
+    ? { name: acc.name, lat: acc.lat, lng: acc.lng }
+    : null;
+}
+
 /** Accommodation (if geocoded) + the given places' coordinates, for a matrix. */
 function placePoints(state: PlanningState, placeIds: string[]): GeoLocation[] {
   const points: GeoLocation[] = [];
-  const acc = state.request.accommodation;
-  if (typeof acc.lat === "number" && typeof acc.lng === "number") {
-    points.push({ name: acc.name, lat: acc.lat, lng: acc.lng });
-  }
+  const center = accommodationGeo(state);
+  if (center) points.push(center);
   for (const id of placeIds) {
     const loc = state.details.get(id)?.location;
     if (loc) points.push(loc);
   }
   return points;
 }
+
+/** A far must-visit past this real driving time from the accommodation is treated
+ *  as a day-trip anchor: it gets its own day, exempt from the day-end / light-day caps. */
+const DAY_TRIP_MINUTES = 60;
 
 /**
  * Build a leg-cost function backed by the provider's real travel-time matrix
@@ -101,26 +111,6 @@ function mustVisitIds(request: TripRequest): Set<string> {
 const RESTAURANT_CATEGORIES = new Set(["restaurant", "cafe", "food"]);
 const isRestaurant = (detail: PlaceDetail): boolean => RESTAURANT_CATEGORIES.has(detail.category);
 
-/**
- * A day that wraps up hours before its pace cap is half-empty (the classic
- * "ends at 11am" plan) — the mirror of DAY_TOO_TIGHT. Flag it so the agent fills
- * it (add places, or move one from a fuller day) instead of shipping a hollow day.
- * Reported only by planDays; finalize does NOT block on it, so the agent can
- * always ship a feasible plan when an area genuinely has no more to add.
- */
-const DAY_LIGHT_SLACK_MINUTES = 180; // should run to within ~3h of the pace cap
-function dayTooLightViolations(itinerary: Itinerary, pace?: Pace): Violation[] {
-  const floor = toMinutes(paceDayEndCap(pace)) - DAY_LIGHT_SLACK_MINUTES;
-  return summariseDays(itinerary)
-    .days.filter((d) => d.visits > 0 && toMinutes(d.endsAt) < floor)
-    .map((d) => ({
-      code: "DAY_TOO_LIGHT",
-      message: `day ${d.day} ends at ${d.endsAt} — too light. ADD more places to it (candidates you haven't used, or search that area) or MOVE one from a fuller day. Do not drop places to fix this.`,
-      dayIndex: d.day,
-      source: "constraint" as const,
-    }));
-}
-
 function centroidOf(placeIds: string[], details: Map<string, PlaceDetail>): GeoLocation | null {
   const locs = placeIds.map((id) => details.get(id)?.location).filter((l): l is GeoLocation => !!l);
   if (locs.length === 0) return null;
@@ -154,6 +144,36 @@ function ensureMustVisitsPlaced(assignments: DayAssignment[], state: PlanningSta
   }
 }
 
+/** After day-trips are carved out, re-home the agent's restaurants onto the nearest
+ *  CITY day (a day-trip day gets a generic meal block near its anchor instead). */
+function mealsByNearestCityDay(
+  restaurants: PlaceDetail[],
+  assignments: DayAssignment[],
+  dayTripDays: ReadonlySet<number>,
+  details: Map<string, PlaceDetail>,
+  legFn: (a: GeoLocation, b: GeoLocation) => number,
+): Map<number, PlaceDetail[]> {
+  const cityDays = assignments.filter((a) => !dayTripDays.has(a.dayIndex));
+  const meals = new Map<number, PlaceDetail[]>();
+  if (cityDays.length === 0) return meals;
+  for (const r of restaurants) {
+    let bestDay = cityDays[0]!.dayIndex;
+    let bestCost = Number.POSITIVE_INFINITY;
+    for (const d of cityDays) {
+      const c = centroidOf(d.placeIds, details);
+      const cost = c ? legFn(r.location, c) : 0;
+      if (cost < bestCost) {
+        bestCost = cost;
+        bestDay = d.dayIndex;
+      }
+    }
+    const list = meals.get(bestDay);
+    if (list) list.push(r);
+    else meals.set(bestDay, [r]);
+  }
+  return meals;
+}
+
 /** Validate the best itinerary we have (with details for opening-hours checks). */
 function validateState(state: PlanningState): ValidationResult {
   const itinerary = state.itinerary ?? state.draft;
@@ -168,16 +188,33 @@ function validateState(state: PlanningState): ValidationResult {
   return validate(itinerary, state.details);
 }
 
-const searchSchema = z.object({
-  query: z.string(),
-  type: z.enum(["attraction", "restaurant"]).optional(),
-  maxResults: z.number().int().positive().optional(),
-});
-const detailsSchema = z.object({ ref: z.string() });
+const searchSchema = z
+  .object({
+    // One query, or many in a single call (`queries`) — batch several categories at
+    // once (e.g. ["temples", "night market", "park"]) instead of a call each.
+    query: z.string().optional(),
+    queries: z.array(z.string()).optional(),
+    type: z.enum(["attraction", "restaurant"]).optional(),
+    maxResults: z.number().int().positive().optional(),
+    /** Center the search on this place/area instead of the accommodation (e.g. a
+     *  far must-visit's name) — for filling a day-trip day with nearby stops. */
+    near: z.string().optional(),
+  })
+  .refine((v) => Boolean(v.query) || (v.queries?.length ?? 0) > 0, {
+    message: "provide `query` or a non-empty `queries`",
+  });
+
+/** Search radius when `near` re-centers away from the accommodation (a day-trip area). */
+const NEAR_RADIUS_M = 40_000;
+// One ref, or many in a single call (`refs`) — detail all your candidates at once.
+const detailsSchema = z
+  .object({ ref: z.string().optional(), refs: z.array(z.string()).optional() })
+  .refine((v) => Boolean(v.ref) || (v.refs?.length ?? 0) > 0, {
+    message: "provide `ref` or a non-empty `refs`",
+  });
 const costSchema = z.object({
   items: z.array(z.object({ label: z.string(), amount: z.number() })),
 });
-const assembleSchema = z.object({ respectWindows: z.boolean().optional() }).passthrough();
 const planDaysSchema = z
   .object({
     // Any integer day label — days are re-indexed 1..n by order, so 0-based is fine too.
@@ -197,38 +234,72 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
       name: "searchPlaces",
       description:
         "Search for candidate places near the accommodation. Each result has a short `ref` — pass it to getPlaceDetails. " +
-        "Places already surfaced are omitted; an empty result means nothing new for this query (search a different category).",
+        "Pass `queries: [...]` to run several category searches in ONE call (e.g. ['temples','night market','park']) instead of a call each. " +
+        "Places already surfaced are omitted; an empty result means nothing new for those queries (search a different category). " +
+        "Pass `near` (a place/area name, e.g. a far must-visit's name) to search around THAT area instead of the accommodation — use it to add nearby stops to a day-trip day.",
       inputSchema: searchSchema,
       async execute(input, state): Promise<ToolOutcome> {
-        const { query, type, maxResults } = input as { query: string; type?: PlaceType; maxResults?: number };
+        const { query, queries, type, maxResults, near } = input as {
+          query?: string;
+          queries?: string[];
+          type?: PlaceType;
+          maxResults?: number;
+          near?: string;
+        };
+        const queryList = (queries?.length ? queries : query ? [query] : []).filter((q) => q.trim());
         // Over-fetch relative to how many we'll keep: curation drops duplicates, so
         // searching only the keep-target would come up short and force a re-search.
         const keepTarget = Math.max(1, state.request.days) * perDayVisitTarget(state.request.pace);
         const effectiveMax = Math.max(maxResults ?? 0, 12, keepTarget * 2);
-        const results = await provider.searchPlaces({
-          query: `${query} in ${state.request.destination}`, // keep results in-region
-          center: state.request.accommodation,
-          maxResults: effectiveMax,
-          ...(type ? { type } : {}),
-        });
+        // `near` re-centers the search on a geocoded area (a day-trip destination),
+        // with a wide radius; falls back to the accommodation if it can't be located.
+        let center = state.request.accommodation;
+        let radius: number | undefined;
+        if (near) {
+          const geo = await provider.geocode({ query: `${near} ${state.request.destination}` });
+          if (geo) {
+            center = { name: near, lat: geo.lat, lng: geo.lng };
+            radius = NEAR_RADIUS_M;
+          }
+        }
         // Skip places already surfaced (searched, detailed, or seeded) so a repeat
-        // search returns only genuinely new candidates instead of re-listing dupes.
+        // search returns only genuinely new candidates — and de-dupe across the batch,
+        // so overlapping queries don't surface the same place twice.
         const known = new Set<string>([...state.places.keys(), ...state.details.keys()]);
-        const summaries = results
-          .filter((p) => !known.has(p.placeId))
-          .map((p) => {
+        const summaries: Array<Record<string, unknown>> = [];
+        // Sequential (not parallel): each new ref is `r${refs.size+1}`, so ref
+        // assignment must see the prior query's additions to stay unique.
+        for (const q of queryList) {
+          const results = await provider.searchPlaces({
+            query: `${q} in ${state.request.destination}`, // keep results in-region
+            center,
+            maxResults: effectiveMax,
+            ...(radius !== undefined ? { radius } : {}),
+            ...(type ? { type } : {}),
+          });
+          for (const p of results) {
+            if (known.has(p.placeId)) continue;
+            known.add(p.placeId);
             const ref = `r${state.refs.size + 1}`;
             state.refs.set(ref, p.placeId);
             state.places.set(p.placeId, p);
-            return {
+            summaries.push({
               ref,
               name: p.name,
               category: p.category,
               ...(typeof p.rating === "number" ? { rating: p.rating } : {}),
               ...(typeof p.priceLevel === "number" ? { priceLevel: p.priceLevel } : {}),
               ...(p.shortAddress ? { shortAddress: p.shortAddress } : {}),
-            };
-          });
+            });
+          }
+        }
+        // Remember a `near` area that yielded nothing new: its day-trip anchor has no
+        // reachable companions, so the goal layer should stop demanding one. A later
+        // productive search of the same area clears it.
+        if (near) {
+          if (summaries.length === 0) state.nearExhausted.add(near);
+          else state.nearExhausted.delete(near);
+        }
         return { content: summaries };
       },
     },
@@ -238,23 +309,35 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
      */
     {
       name: "getPlaceDetails",
-      description: "Fetch full details (coords, opening window, visit minutes, ticket price) for a place by its `ref` from searchPlaces.",
+      description:
+        "Fetch full details (coords, opening window, visit minutes, ticket price) for places from searchPlaces. " +
+        "Pass `refs: [...]` to detail MANY at once in a single call (preferred — do all your candidates together) or `ref` for one.",
       inputSchema: detailsSchema,
       async execute(input, state): Promise<ToolOutcome> {
-        const { ref } = input as { ref: string };
-        const placeId = state.refs.get(ref) ?? ref; // refs map to ids; tolerate a real id too
-        const detail = await provider.getPlaceDetails({ placeId });
-        state.details.set(detail.placeId, detail);
-        return {
-          content: {
-            ref,
-            name: detail.name,
-            category: detail.category,
-            ...(detail.openWindow ? { openWindow: detail.openWindow } : {}),
-            ...(typeof detail.ticketPrice === "number" ? { ticketPrice: detail.ticketPrice } : {}),
-            ...(typeof detail.rating === "number" ? { rating: detail.rating } : {}),
-          },
-        };
+        const { ref, refs } = input as { ref?: string; refs?: string[] };
+        const list = refs?.length ? refs : ref ? [ref] : [];
+        const rows = await Promise.all(
+          list.map(async (r) => {
+            const placeId = state.refs.get(r) ?? r; // refs map to ids; tolerate a real id too
+            try {
+              const detail = await provider.getPlaceDetails({ placeId });
+              state.details.set(detail.placeId, detail);
+              return {
+                ref: r,
+                name: detail.name,
+                category: detail.category,
+                ...(detail.openWindow ? { openWindow: detail.openWindow } : {}),
+                ...(typeof detail.ticketPrice === "number" ? { ticketPrice: detail.ticketPrice } : {}),
+                ...(typeof detail.rating === "number" ? { rating: detail.rating } : {}),
+              };
+            } catch (e) {
+              // One bad ref shouldn't sink the whole batch — report it inline.
+              return { ref: r, error: e instanceof Error ? e.message : "lookup failed" };
+            }
+          }),
+        );
+        // Single-ref call keeps the single-object shape (back-compat); a batch returns an array.
+        return { content: refs?.length ? rows : rows[0] };
       },
     },
     /**
@@ -326,7 +409,7 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
     },
     /**
      * in:  { days: [{ day: 1, refs: ["r5","r2"] }, { day: 2, refs: ["r6"] }] }
-     * out: { totalTravelMinutes: 95, days: [{ day, visits, travelMinutes, endsAt }, …], hardViolations: [...], softWarnings: [...] }
+     * out: { totalTravelMinutes: 95, days: [{ day, visits, travelMinutes, endsAt }, …], hardViolations: [...], goal: { satisfied, findings } }
      * You choose the day grouping; code orders each day for shortest travel, times it, and validates.
      */
     {
@@ -367,105 +450,88 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
         if (built.length === 0) {
           return { content: { error: "no valid places in your plan; use refs you've detailed" }, isError: true };
         }
-        const assignments: DayAssignment[] = built.map((b, i) => ({ dayIndex: i + 1, placeIds: b.attractions }));
-        const mealsByDay = new Map<number, PlaceDetail[]>();
+        let assignments: DayAssignment[] = built.map((b, i) => ({ dayIndex: i + 1, placeIds: b.attractions }));
+        let mealsByDay = new Map<number, PlaceDetail[]>();
         built.forEach((b, i) => {
           if (b.restaurants.length > 0) mealsByDay.set(i + 1, b.restaurants);
         });
         ensureMustVisitsPlaced(assignments, state);
+
+        // Real-travel leg costs over every attraction (+ accommodation) — one matrix
+        // call, reused for day-trip carving, ordering, and timing.
+        const legFn = await buildLegMinutes(provider, placePoints(state, assignments.flatMap((a) => a.placeIds)));
+        const loc = (id: string): GeoLocation | undefined => state.details.get(id)?.location;
+
+        // A far must-visit is invisible to the agent (auto-pinned), so code carves it
+        // onto its own day-trip day rather than let it wreck a city day's timing.
+        let dayTripDays: ReadonlySet<number> = new Set<number>();
+        const center = accommodationGeo(state);
+        if (center) {
+          const cost = (a: string, b: string): number => {
+            const la = loc(a);
+            const lb = loc(b);
+            return la && lb ? legFn(la, lb) : 0;
+          };
+          const centerCost = (id: string): number => {
+            const l = loc(id);
+            return l ? legFn(center, l) : 0;
+          };
+          const anchorIds = [...mustVisitIds(state.request)].filter(
+            (id) => state.details.has(id) && centerCost(id) > DAY_TRIP_MINUTES,
+          );
+          const carved = carveDayTrips({
+            attractionIds: assignments.flatMap((a) => a.placeIds),
+            anchorIds,
+            days: state.request.days,
+            cost,
+            centerCost,
+          });
+          if (carved) {
+            assignments = carved.assignments;
+            dayTripDays = new Set(carved.dayTripDays);
+            mealsByDay = mealsByNearestCityDay(
+              built.flatMap((b) => b.restaurants),
+              assignments,
+              dayTripDays,
+              state.details,
+              legFn,
+            );
+          }
+        }
+
         state.assignments = assignments;
         const draft = scheduleItinerary({
           request: state.request,
           assignments,
           details: state.details,
-          legMinutes: await buildLegMinutes(provider, placePoints(state, assignments.flatMap((a) => a.placeIds))),
+          legMinutes: legFn,
           mustVisitIds: mustVisitIds(state.request),
           mealsByDay,
+          dayTripDays,
           options: { respectWindows: true },
         });
         state.draft = draft;
         const result = validate(draft, state.details);
-        const hardViolations = [...result.hardViolations, ...dayTooLightViolations(draft, state.request.pace)];
+        const hardViolations = result.hardViolations;
+        // Feasibility (hardViolations) blocks; the goal assessment never does — it
+        // tells the agent how to make a legal plan actually GOOD, so it doesn't just
+        // drop places to silence violations.
+        const goal = evaluateGoal(draft, state.details, state.nearExhausted);
+        const note =
+          hardViolations.length > 0
+            ? undefined
+            : goal.satisfied
+              ? "No hard violations and goals met — call finalizeItinerary."
+              : "No hard violations, but the plan isn't done yet — close the goal findings (add / move / enrich), then finalize.";
         return {
           content: {
             ...summariseDays(draft),
             hardViolations,
-            softWarnings: result.softWarnings,
-            ...(hardViolations.length === 0 ? { note: "Valid — call finalizeItinerary." } : {}),
+            goal,
+            ...(note ? { note } : {}),
           },
           isError: hardViolations.length > 0,
         };
-      },
-    },
-    /**
-     * in:  {}    out: [{ dayIndex, placeIds: […] }, …]   (re-balanced; use for DAY_TOO_TIGHT)
-     */
-    {
-      name: "rebalanceDays",
-      description: "Re-balance the day assignments so no day exceeds its time budget. Use when finalize reports DAY_TOO_TIGHT.",
-      inputSchema: noInput,
-      execute(_input, state): ToolOutcome {
-        if (!state.assignments) {
-          return { content: { error: "no day assignments; call clusterByDay first" }, isError: true };
-        }
-        state.assignments = rebalanceForBudget({
-          assignments: state.assignments,
-          details: state.details,
-          legMinutes,
-          ...(state.request.pace ? { pace: state.request.pace } : {}),
-        });
-        return { content: state.assignments };
-      },
-    },
-    /**
-     * in:  {}    out: [{ dayIndex, placeIds: […] }, …]   (pricey non-must-visits dropped; use for BUDGET_EXCEEDED)
-     */
-    {
-      name: "trimToBudget",
-      description:
-        "Drop the most-expensive non-must-visit places until the plan fits the budget. Use when finalize reports BUDGET_EXCEEDED.",
-      inputSchema: noInput,
-      execute(_input, state): ToolOutcome {
-        if (!state.assignments) {
-          return { content: { error: "no day assignments; call clusterByDay first" }, isError: true };
-        }
-        const band = resolveBudget(state.request);
-        if (!band) {
-          return { content: { error: "no budget set" }, isError: true };
-        }
-        state.assignments = trimToBudget({
-          assignments: state.assignments,
-          details: state.details,
-          ceiling: band.maxTotal,
-          pinnedIds: mustVisitIds(state.request),
-        });
-        return { content: state.assignments };
-      },
-    },
-    /**
-     * in:  { respectWindows?: true }
-     * out: { days: 2, totalCost: 660 }    (the full draft is kept in state)
-     */
-    {
-      name: "assembleItinerary",
-      description:
-        "Lay out a draft itinerary (visits, transit, meals) from the day assignments, honouring opening hours. Takes no arguments — it operates on the data you've gathered.",
-      inputSchema: assembleSchema,
-      async execute(input, state): Promise<ToolOutcome> {
-        if (!state.assignments) {
-          return { content: { error: "no day assignments; call clusterByDay first" }, isError: true };
-        }
-        const { respectWindows } = input as { respectWindows?: boolean };
-        const draft = scheduleItinerary({
-          request: state.request,
-          assignments: state.assignments,
-          details: state.details,
-          legMinutes: await buildLegMinutes(provider, placePoints(state, state.assignments.flatMap((a) => a.placeIds))),
-          mustVisitIds: mustVisitIds(state.request),
-          ...(respectWindows !== undefined ? { options: { respectWindows } } : {}),
-        });
-        state.draft = draft;
-        return { content: { days: draft.days.length, totalCost: draft.totalCost } };
       },
     },
     /**
@@ -480,7 +546,7 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
       execute(_input, state): ToolOutcome {
         const draft = state.draft;
         if (!draft) {
-          return { content: { error: "no draft; call assembleItinerary first" }, isError: true };
+          return { content: { error: "no draft; call planDays first" }, isError: true };
         }
         const result = validate(draft, state.details);
         // finalize enforces only true feasibility (windows, day cap, flight, budget) —
@@ -499,24 +565,36 @@ function buildTools(provider: ToolProvider): ToolDef<PlanningState>[] {
 }
 
 const INSTRUCTION = [
-  "You are a travel-planning agent. Plan a trip by calling tools in this order:",
-  "(1) searchPlaces to find candidate attractions — use DESCRIPTIVE queries ('top attractions', 'temples',",
-  "'night market', 'park'), NOT just the city name; cast a wide net (maxResults ~12). Each result has a `ref`.",
-  "You may also search 'restaurant' once for meal options — restaurants become meals, not sightseeing stops;",
-  "(2) getPlaceDetails(ref) for the candidates, passing a `ref` from searchPlaces.",
-  "Must-visits are already loaded in your data — do NOT search for or fetch them; they're pinned automatically;",
-  "(3) planDays — YOU decide the day-by-day plan: group places into days by AREA and THEME. Put places in the",
-  "same district / part of town together, keep a natural cluster on one day (e.g. the temple/lake area, or the",
-  "harbour/old-town area), and don't split a themed zone across days. Aim to FILL both days (roughly balanced).",
-  "Put ~1 restaurant on each day, on the day that actually runs through a mealtime. Submit { days: [{ day, refs }] }.",
-  "(You may call clusterByDay first for a rough distance-based suggestion, then improve the grouping.)",
-  "planDays returns each day's travel time + any violations. Fix by REGROUPING and calling planDays again —",
-  "prefer MOVING or ADDING places over dropping them:",
-  "CLOSED_HOURS → move that place to a day/slot where it's open (or drop it if it can't fit any day);",
-  "DAY_TOO_TIGHT → move a place to the lighter day;",
-  "DAY_TOO_LIGHT → the day is too empty: ADD more places to it (candidates you didn't use, or search that",
-  "area) or move one from a fuller day — don't leave it half-empty. If that area truly has no more places, finalize anyway;",
-  "(4) finalizeItinerary once planDays reports no hard violations. Stop when it succeeds.",
+  "You are a travel-planning agent. Your GOAL is a genuinely good trip: each day comfortably full and well-paced,",
+  "places grouped by area/theme, the must-sees covered, a variety of experiences, and any day-trip worth the drive.",
+  "The hard violations are RED LINES you must not cross — they are NOT the goal. Prefer MOVE, REGROUP, or ADD. But when",
+  "a day is OVER-FULL (DAY_TOO_TIGHT) and no other day can absorb the stop, DO drop the lowest-value NON-must-visit from",
+  "that day — that's how an over-stuffed plan converges (must-visits are pinned and can NEVER be dropped). Never drop to",
+  "fix a thin / under-used day — that's backwards; add there instead.",
+  "Work in this order:",
+  "(1) searchPlaces to find candidates — use DESCRIPTIVE queries ('top attractions', 'temples', 'night market',",
+  "'park'), NOT just the city name; batch several categories in ONE call via `queries: [...]`. Cast a wide net",
+  "(maxResults ~12). Each result has a `ref`. Search 'restaurant' once for meal options — restaurants become meals,",
+  "not sightseeing stops;",
+  "(2) getPlaceDetails for the candidates — pass `refs: [...]` to detail them ALL in one call, not one at a time.",
+  "Must-visits are already loaded — do NOT search/fetch them; pinned automatically;",
+  "(3) planDays — YOU decide the day-by-day plan: same-district / same-theme places on one day; don't split a themed",
+  "zone; put ~1 restaurant on the day that runs through a mealtime. Submit { days: [{ day, refs }] }.",
+  "A day-trip day holds a far must-visit on its own day; its long commute is EXPECTED (don't shrink its travel time).",
+  "planDays returns two separate things:",
+  "• hardViolations — RED LINES, block finalize. Fix by moving/regrouping: CLOSED_HOURS → move that place to a day/slot",
+  "where it's open (or, only if it fits nowhere, drop it); DAY_TOO_TIGHT → move a stop to a lighter day, or if every",
+  "other day is also full, drop the lowest-value non-must-visit from the over-long day; BUDGET_EXCEEDED → drop the",
+  "priciest NON-must-visit and re-plan.",
+  "• goal = { satisfied, findings } — how to make a legal plan actually GOOD. Each finding has a `gap` (high/med/low)",
+  "and a concrete move. Close the high-gap ones by dimension: FULLNESS/BALANCE → add a candidate you skipped, or move",
+  "one from a fuller day (if a day's area is tapped out, searchPlaces for more there); DAY_TRIP → searchPlaces",
+  "near=<the anchor's name>, getPlaceDetails, include them (code keeps them on the day-trip day); MEALS → add a",
+  "restaurant on that day; DIVERSITY/RATING → swap a stop for an unused different-theme / higher-rated candidate;",
+  "COHERENCE → regroup so same-area places share a day. Re-run planDays after each change.",
+  "(4) finalizeItinerary ONLY when hardViolations is empty AND goal.satisfied is true (no high-gap findings). Remaining",
+  "med/low findings are optional polish — finalize if they're not worth another change, or a day's area truly has no",
+  "more to add. Stop when finalize succeeds.",
 ].join(" ");
 
 export interface ColdStartSeed {
@@ -547,6 +625,7 @@ export function createColdStartSpec(
       places: seed?.places ?? new Map(),
       refs: new Map(),
       details: seed?.details ?? new Map(),
+      nearExhausted: new Set(),
       assignments: null,
       draft: null,
       itinerary: null,

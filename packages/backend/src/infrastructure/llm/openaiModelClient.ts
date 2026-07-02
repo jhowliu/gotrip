@@ -108,6 +108,8 @@ export function mapUsage(
 export interface OpenAIModelClientOptions {
   apiKey?: string; // defaults to OPENAI_API_KEY
   baseURL?: string;
+  /** Extra default headers (e.g. OpenRouter's optional HTTP-Referer / X-Title). */
+  headers?: Record<string, string>;
   /** Logs the OpenAI request, response, and token usage to the trace. */
   tracer?: Tracer;
 }
@@ -116,6 +118,7 @@ export function createOpenAIModelClient(options: OpenAIModelClientOptions = {}):
   const client = new OpenAI({
     ...(options.apiKey ? { apiKey: options.apiKey } : {}),
     ...(options.baseURL ? { baseURL: options.baseURL } : {}),
+    ...(options.headers ? { defaultHeaders: options.headers } : {}),
   });
   const trace = options.tracer;
 
