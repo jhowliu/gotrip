@@ -43,4 +43,22 @@ describe("validate (M1 checks)", () => {
     const result = validate(itinerary);
     expect(result.hardViolations.map((v) => v.code)).not.toContain("DAY_TOO_TIGHT");
   });
+
+  it("flags DAY_TOO_TIGHT (not a false pass) when a day runs past midnight", () => {
+    // A visit starting 23:30 for 60m ends 24:30 — the HH:MM wrap must not read as 00:30.
+    const itinerary = oneDay(request({ pace: "packed" }), [visit({ startTime: "23:30", durationMinutes: 60 })]);
+    const result = validate(itinerary);
+    const tight = result.hardViolations.find((v) => v.code === "DAY_TOO_TIGHT");
+    expect(tight).toBeDefined();
+    expect(tight!.message).toContain("24:30"); // reported un-wrapped, obviously over-long
+  });
+
+  it("exempts a day-trip day from the day-end cap", () => {
+    const itinerary: Itinerary = {
+      request: request({ pace: "relaxed" }),
+      days: [{ dayIndex: 1, items: [visit({ startTime: "18:30", durationMinutes: 120 })], dayTrip: true }],
+    };
+    const result = validate(itinerary);
+    expect(result.hardViolations.map((v) => v.code)).not.toContain("DAY_TOO_TIGHT");
+  });
 });

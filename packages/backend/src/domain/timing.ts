@@ -54,6 +54,34 @@ export function endTime(item: Pick<ItineraryItem, "startTime" | "durationMinutes
 /** Each day starts here. */
 export const DAY_START = "09:00";
 
+/**
+ * Absolute end-of-day in minutes from midnight, robust to the HH:MM wrap: a day
+ * that runs to 24:09 returns 1449, not 9. Item start times wrap at midnight (see
+ * `toHHMM`), so a stop that starts after midnight looks numerically tiny; anything
+ * starting before DAY_START is therefore treated as next-day. Used by the day-end
+ * guards so an over-long day reads as over-long, not empty. Empty day → DAY_START.
+ */
+export function dayEndMinutes(
+  items: readonly Pick<ItineraryItem, "startTime" | "durationMinutes">[],
+): number {
+  const pivot = toMinutes(DAY_START);
+  let end = pivot;
+  for (const item of items) {
+    const start = toMinutes(item.startTime);
+    const abs = start < pivot ? start + 1440 : start;
+    end = Math.max(end, abs + item.durationMinutes);
+  }
+  return end;
+}
+
+/** Format minutes-from-midnight without wrapping, so a past-midnight end reads
+ *  "24:09" (over-long and obvious) rather than "00:09". */
+export function toClock(totalMinutes: number): string {
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
 /** Conservative buffer: leave for the airport this long before departure. */
 export const AIRPORT_BUFFER_MINUTES = 180;
 
